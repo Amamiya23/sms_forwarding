@@ -486,6 +486,18 @@
       }).catch(function(e){b.disabled=false;r.className='result-box result-error';r.textContent='请求失败: '+e;});
     }
 
+    // ---- NTP 立即校时 ----
+    function ntpSync(){
+      var b=document.getElementById('ntpBtn'),r=document.getElementById('ntpResult');
+      if(b){b.disabled=true;}
+      r.className='result-box result-loading';r.textContent='正在向 NTP 服务器校时...';
+      fetch('/ntp',{method:'POST'}).then(function(x){return x.json();}).then(function(d){
+        r.className='result-box '+(d.success?'result-success':'result-error');
+        r.textContent=(d.message||'')+(d.nowLocal?('　当前：'+d.nowLocal):'');
+      }).catch(function(e){r.className='result-box result-error';r.textContent='请求失败: '+e;})
+        .finally(function(){if(b)b.disabled=false;});
+    }
+
     // ---- Modem Control ----
     function modemAction(action){
       var names={'restart':'软重启','hardreset':'硬重启'};

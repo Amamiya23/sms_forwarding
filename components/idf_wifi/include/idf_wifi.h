@@ -23,5 +23,7 @@ struct IdfWifiStatus {
 
 esp_err_t idf_wifi_start(const IdfConfig& config);
 esp_err_t idf_wifi_reconnect(void);
+// 手动强制立即 NTP 校时(网页"立即校时"按钮)；未联网返回 ESP_ERR_INVALID_STATE
+esp_err_t idf_wifi_resync_ntp(void);
 esp_err_t idf_wifi_scan_json(std::string& out_json);
 IdfWifiStatus idf_wifi_get_status(void);

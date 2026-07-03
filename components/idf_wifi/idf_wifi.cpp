@@ -641,6 +641,20 @@ esp_err_t idf_wifi_start(const IdfConfig& config)
     return ESP_OK;
 }
 
+esp_err_t idf_wifi_resync_ntp(void)
+{
+    if (!s_started.load(std::memory_order_relaxed)) return ESP_ERR_INVALID_STATE;
+    if (!s_sta_connected.load(std::memory_order_relaxed)) return ESP_ERR_INVALID_STATE;  // 未联网无法校时
+    if (!s_sntp_started.load(std::memory_order_relaxed)) {
+        start_sntp_once();  // 尚未启动则启动(内部会立即发起一次请求)
+        idf_logf("网页触发 NTP 校时：SNTP 已启动");
+    } else {
+        esp_sntp_restart();  // 已启动则强制立即重新同步
+        idf_logf("网页触发 NTP 立即校时");
+    }
+    return ESP_OK;
+}
+
 esp_err_t idf_wifi_reconnect(void)
 {
     if (!s_started.load(std::memory_order_relaxed)) return ESP_ERR_INVALID_STATE;

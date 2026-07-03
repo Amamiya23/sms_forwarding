@@ -34,6 +34,14 @@
             <div class="result-box" id="flightResult"></div>
           </div>
         </div>
+        <div class="card">
+          <div class="card-header">时间同步 (NTP)</div>
+          <div class="card-body">
+            <div class="btn-row"><button class="btn btn-primary" id="ntpBtn" onclick="ntpSync()">立即校时</button></div>
+            <p class="form-hint">强制向 NTP 服务器重新对时（设备联网后本会每小时自动对时一次）。NTP 服务器在「系统设置」里配置。</p>
+            <div class="result-box" id="ntpResult"></div>
+          </div>
+        </div>
       </div>
     </div>
 

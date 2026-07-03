@@ -629,8 +629,12 @@ static esp_err_t handle_flight(httpd_req_t* req)
         resp.clear();
         esp_err_t err = idf_modem_send_at(cmd, 8000, resp);
         success = (err == ESP_OK);
-        if (success) mode = target;
-        else message = resp.empty() ? esp_err_to_name(err) : resp;
+        if (success) {
+            mode = target;
+            idf_logf("网页切换飞行模式：%s", target == 4 ? "开启（射频关闭，暂停收发短信）" : "关闭（恢复全功能）");
+        } else {
+            message = resp.empty() ? esp_err_to_name(err) : resp;
+        }
     }
 
     if (success) {
@@ -667,6 +671,7 @@ static esp_err_t handle_modem_control(httpd_req_t* req)
         bool hard = action == "hardreset";
         esp_err_t err = idf_modem_request_reset(hard);
         success = (err == ESP_OK);
+        if (success) idf_logf("网页触发模组%s重启", hard ? "硬" : "软");
         message = success
             ? (hard ? "正在硬重启模组，请等待约 15 秒后刷新页面" : "正在软重启模组，请等待约 15 秒后刷新页面")
             : esp_err_to_name(err);
@@ -736,6 +741,7 @@ static esp_err_t handle_ussd(httpd_req_t* req)
     }
     if (modem_busy_reply(req)) return ESP_OK;
 
+    idf_logf("网页发起 USSD 查询：%s", code.c_str());
     std::string cmd = "AT+CUSD=1,\"" + code + "\",15";
     std::string resp;
     esp_err_t err = idf_modem_send_at_until(cmd, "+CUSD:", 20000, resp);
@@ -841,6 +847,7 @@ static esp_err_t handle_save(httpd_req_t* req)
     bool operator_changed = sim_form && before.operatorPlmn != after.operatorPlmn;
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_sendstr(req, "OK");
+    idf_log_line("网页保存配置");
     if (data_changed || operator_changed) {
         ModemApplyTaskArg* arg = new (std::nothrow) ModemApplyTaskArg();
         if (arg) {
@@ -882,6 +889,7 @@ static esp_err_t handle_import_config(httpd_req_t* req)
         resp += "}";
         return httpd_resp_send(req, resp.c_str(), resp.size());
     }
+    idf_logf("网页导入配置：应用 %d 项", applied);
     char msg[96];
     snprintf(msg, sizeof(msg), "已导入 %d 项，建议重启使全部生效", applied);
     std::string resp = "{\"success\":true,";
@@ -903,6 +911,7 @@ static esp_err_t handle_factory_reset(httpd_req_t* req)
 {
     if (!check_auth(req)) return ESP_OK;
     esp_err_t err = idf_config_factory_reset();
+    if (err == ESP_OK) idf_log_line("网页触发恢复出厂：已清除全部配置，即将重启");
     httpd_resp_set_type(req, "application/json");
     if (err != ESP_OK) {
         std::string body = "{\"success\":false,";
@@ -945,6 +954,7 @@ static esp_err_t handle_wifi(httpd_req_t* req)
     httpd_resp_set_type(req, "application/json");
     if (strcmp(action, "restart") == 0) {
         esp_err_t err = idf_wifi_reconnect();
+        if (err == ESP_OK) idf_log_line("网页触发 WiFi 重连");
         std::string msg = err == ESP_OK
             ? "{\"success\":true,\"message\":\"已触发 WiFi 重连\"}"
             : "{\"success\":false,\"message\":\"WiFi 尚未启动\"}";
@@ -1665,6 +1675,7 @@ static esp_err_t handle_keepalive(httpd_req_t* req)
         if (err == ESP_OK) {
             const IdfConfig& cfg = idf_config_get();
             std::string local = format_epoch_local(now, cfg.tzOffsetMin);
+            idf_logf("网页重置保号基准日为 %s", local.empty() ? "当前时间" : local.c_str());
             std::string body = "{\"success\":true,";
             json_prop(body, "message", local.empty() ? "基准日已重置" : std::string("基准日已重置为 ") + local);
             char buf[64];
@@ -1756,9 +1767,31 @@ static esp_err_t handle_keepalive(httpd_req_t* req)
     return httpd_resp_send(req, body.c_str(), body.size());
 }
 
+static esp_err_t handle_ntp(httpd_req_t* req)
+{
+    if (!check_auth(req)) return ESP_OK;
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = idf_wifi_resync_ntp();
+    uint32_t now = static_cast<uint32_t>(time(nullptr));
+    const IdfConfigStatusView cfg = idf_config_get_status_view();
+    std::string body = "{\"success\":";
+    body += (err == ESP_OK) ? "true" : "false";
+    body += ",";
+    if (err == ESP_OK) {
+        json_prop(body, "message", "已发起校时，同步成功后设备时间随即更新");
+    } else {
+        json_prop(body, "message", "WiFi 未连接，暂不能校时");
+    }
+    body += ",";
+    json_prop(body, "nowLocal", format_epoch_local(now, cfg.tzOffsetMin));
+    body += "}";
+    return httpd_resp_send(req, body.c_str(), body.size());
+}
+
 static esp_err_t handle_reboot(httpd_req_t* req)
 {
     if (!check_auth(req)) return ESP_OK;
+    idf_log_line("网页触发设备重启");
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"设备即将重启\"}");
     xTaskCreate(restart_task, "web_restart", 2048, nullptr, 1, nullptr);
@@ -1909,6 +1942,7 @@ esp_err_t idf_web_start(void)
     IDF_WEB_TRY_REGISTER("/config.json", httpd_register_uri_handler(s_server, &config_json));
     IDF_WEB_TRY_REGISTER("/save", httpd_register_uri_handler(s_server, &save));
     IDF_WEB_TRY_REGISTER("/wifi", httpd_register_uri_handler(s_server, &wifi));
+    IDF_WEB_TRY_REGISTER("/ntp", register_handler(s_server, "/ntp", HTTP_POST, handle_ntp));
     IDF_WEB_TRY_REGISTER("/wifiscan", httpd_register_uri_handler(s_server, &wifi_scan));
     IDF_WEB_TRY_REGISTER("/wificonfig", httpd_register_uri_handler(s_server, &wifi_config));
     IDF_WEB_TRY_REGISTER("/messages", httpd_register_uri_handler(s_server, &messages));

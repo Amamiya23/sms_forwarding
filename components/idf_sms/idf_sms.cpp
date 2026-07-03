@@ -162,19 +162,6 @@ static bool number_blacklisted(const std::string& list, const std::string& sende
     return false;
 }
 
-static std::string mask_phone(const std::string& phone)
-{
-    size_t n = phone.size();
-    if (n <= 4) return phone;
-    size_t head = n >= 8 ? 3 : 1;
-    size_t tail = n >= 8 ? 4 : 2;
-    if (head + tail >= n) {
-        head = n / 3;
-        tail = n / 3;
-    }
-    return phone.substr(0, head) + "****" + phone.substr(n - tail);
-}
-
 static bool is_valid_phone_number(const std::string& phone)
 {
     if (phone.size() < 3 || phone.size() > 20) return false;
@@ -236,7 +223,7 @@ static bool process_admin_command(const std::string& sender, const std::string& 
     std::string cmd = trim(text);
     if (!(starts_with(cmd, "SMS:") || cmd == "RESET")) return false;
 
-    idf_logf("处理管理员命令 from=%s", mask_phone(sender).c_str());
+    idf_logf("处理管理员命令 from=%s", sender.c_str());
     if (starts_with(cmd, "SMS:")) {
         size_t first = cmd.find(':');
         size_t second = first == std::string::npos ? std::string::npos : cmd.find(':', first + 1);
@@ -247,7 +234,7 @@ static bool process_admin_command(const std::string& sender, const std::string& 
         }
         std::string target = trim(cmd.substr(first + 1, second - first - 1));
         std::string content = trim(cmd.substr(second + 1));
-        idf_logf("管理员命令目标号码: %s", mask_phone(target).c_str());
+        idf_logf("管理员命令目标号码: %s", target.c_str());
         if (!is_valid_phone_number(target)) {
             idf_log_line("目标号码非法，拒绝执行");
             idf_push_enqueue_email("命令执行失败", "SMS命令目标号码非法（应为 3-20 位数字，可带 + 前缀）");
@@ -435,7 +422,7 @@ static void process_sms_content(const char* sender_raw, const char* text_raw, co
     const IdfConfig cfg = idf_config_get();
 
     if (number_blacklisted(cfg.numberBlackList, sender)) {
-        idf_logf("短信发件人 %s 在黑名单中，已忽略", mask_phone(sender).c_str());
+        idf_logf("短信发件人 %s 在黑名单中，已忽略", sender.c_str());
         return;
     }
 
@@ -443,7 +430,7 @@ static void process_sms_content(const char* sender_raw, const char* text_raw, co
     // 展示/转发用本地可读时间，未同步时才退回原始数字串
     uint32_t hash = fnv1a32(sender + "|" + timestamp + "|" + text);
     if (seen_recently(hash)) {
-        idf_logf("重复短信 %s 已忽略", mask_phone(sender).c_str());
+        idf_logf("重复短信 %s 已忽略", sender.c_str());
         return;
     }
 
@@ -460,8 +447,8 @@ static void process_sms_content(const char* sender_raw, const char* text_raw, co
 
     uint32_t id = idf_inbox_add(sender.c_str(), text.c_str(), display_ts.c_str());
     update_status(true, true);
-    idf_logf("收到短信 id=%u from=%s len=%u，已入本地收件箱",
-             static_cast<unsigned>(id), mask_phone(sender).c_str(), static_cast<unsigned>(text.size()));
+    // 默认日志展示完整发件人(便于确认是谁)，正文仍不落盘(在收发短信页查看)
+    idf_logf("收到短信 id=%u 来自 %s，入队转发中", static_cast<unsigned>(id), sender.c_str());
     idf_push_enqueue_forward(sender.c_str(), text.c_str(), display_ts.c_str(), id);
 }
 
@@ -746,7 +733,7 @@ static void sms_task(void*)
             if (pop_outgoing_sms(out)) {
                 std::string send_message;
                 idf_logf("网页短信出队发送: %s len=%u",
-                         mask_phone(out.phone).c_str(), static_cast<unsigned>(out.text.size()));
+                         out.phone.c_str(), static_cast<unsigned>(out.text.size()));
                 idf_sms_send_text(out.phone, out.text, send_message);
                 vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
@@ -836,7 +823,7 @@ esp_err_t idf_sms_send_text(const std::string& phone_raw, const std::string& tex
     idf_sent_add(phone.c_str(), text.c_str(), ok);
     if (ok) {
         message = "短信发送成功";
-        idf_logf("网页发送短信成功: %s len=%u", mask_phone(phone).c_str(), static_cast<unsigned>(text.size()));
+        idf_logf("网页发送短信成功: %s len=%u", phone.c_str(), static_cast<unsigned>(text.size()));
     } else {
         message = resp.empty() ? std::string(esp_err_to_name(err)) : trim(resp);
         idf_logf("网页发送短信失败: %s", message.c_str());

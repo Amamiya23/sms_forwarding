@@ -1192,12 +1192,12 @@ static bool send_to_channel(const IdfPushChannel& channel, const char* sender_ra
     }
 
     std::string name = channel.name.empty() ? ("通道" + std::to_string(channel.type)) : channel.name;
-    idf_logf("发送到推送通道: %s", name.c_str());
     int code = 0;
     esp_err_t err = http_request(url, method, content_type, body, code);
     bool ok = (err == ESP_OK && code >= 200 && code < 300);
-    if (err == ESP_OK) idf_logf("[%s] HTTP 响应码: %d", name.c_str(), code);
-    else idf_logf("[%s] HTTP 请求失败: %s", name.c_str(), esp_err_to_name(err));
+    // 发送中+响应码两行合并为一行结果，降噪同时保留通道名与成败
+    if (err == ESP_OK) idf_logf("%s 推送%s (HTTP %d)", name.c_str(), ok ? "成功" : "失败", code);
+    else idf_logf("%s 推送失败: %s", name.c_str(), esp_err_to_name(err));
     return ok;
 }
 
@@ -1322,6 +1322,7 @@ static bool process_forward_one()
     int dispatched = 0;
     bool email_queued = false;
 
+    std::string targets;  // 命中的通道名列表，用于一行日志点名去向
     ensure_init();
     if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE) {
         for (uint8_t i = 0; i < IDF_MAX_PUSH_CHANNELS; ++i) {
@@ -1329,6 +1330,9 @@ static bool process_forward_one()
             if (!channel_valid(cfg.pushChannels[i])) continue;
             enqueue_push_job_locked(i, job.sender, job.text, job.timestamp, 0, 0);
             ++dispatched;
+            if (!targets.empty()) targets += "、";
+            targets += cfg.pushChannels[i].name.empty()
+                           ? ("通道" + std::to_string(i + 1)) : cfg.pushChannels[i].name;
         }
         if (email_selected && cfg.emailEnabled && idf_config_email_configured()) {
             // 主题只放正文前若干字符(全文在正文里)，避免超长 Subject 被严格 MTA 拒收
@@ -1348,9 +1352,16 @@ static bool process_forward_one()
         }
         xSemaphoreGive(s_mutex);
     }
-    if (dispatched > 0) idf_logf("推送任务已入队: %d 个通道", dispatched);
-    if (email_queued) idf_logf("短信转发邮件已入队，当前待发=%d", idf_push_email_queue_depth());
-    if (dispatched == 0 && !email_queued) idf_log_line("该短信无有效推送目标，已完成规则处理");
+    // 一行点名去向：收到→转发到哪些通道/邮件，一眼看清
+    if (email_queued) {
+        if (!targets.empty()) targets += "、";
+        targets += "邮件";
+    }
+    if (!targets.empty()) {
+        idf_logf("转发 id=%u → %s", static_cast<unsigned>(job.inboxId), targets.c_str());
+    } else {
+        idf_logf("转发 id=%u 无有效目标(未启用通道/未配置邮件)", static_cast<unsigned>(job.inboxId));
+    }
     idf_inbox_mark_forwarded(job.inboxId);
     s_busy.store(false, std::memory_order_relaxed);
     return true;
