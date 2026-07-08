@@ -1673,15 +1673,67 @@ static bool modem_quick_start_allowed(esp_reset_reason_t reason)
     }
 }
 
+// 解析 AT+CPMS 设置命令的响应 "+CPMS: <used1>,<total1>,<used2>,<total2>,<used3>,<total3>"，
+// 输出 <mem1> 总容量。查询响应(+CPMS: "SM",0,0,...)带引号存储名会解析失败，恰好只匹配设置响应。
+static bool parse_cpms_total(const std::string& resp, long& total)
+{
+    size_t p = resp.find("+CPMS:");
+    if (p == std::string::npos) return false;
+    std::string line = line_containing(resp, p);
+    const char* token = strstr(line.c_str(), "+CPMS:");
+    if (!token) return false;
+    long values[6] = {};
+    int count = 0;
+    if (!parse_comma_longs(token + strlen("+CPMS:"), values, 6, count) || count < 2) return false;
+    total = values[1];
+    return true;
+}
+
+// 按优先级选择短信存储：MT → ME → SM。部分可写 eSIM 的 SM 存储返回 OK 但容量为
+// 0,0(issue #3)，此时短信实际无处可存，必须视为不可用并继续尝试下一候选；
+// 响应里解析不出容量的按可用处理(不同固件设置命令可能只回 OK)。
+static bool select_sms_storage(void)
+{
+    static const struct { const char* cmd; const char* name; } kCandidates[] = {
+        {"AT+CPMS=\"MT\",\"MT\",\"MT\"", "MT"},
+        {"AT+CPMS=\"ME\",\"ME\",\"ME\"", "ME"},
+        {"AT+CPMS=\"SM\",\"SM\",\"SM\"", "SM"},
+    };
+    for (const auto& c : kCandidates) {
+        std::string resp;
+        if (!send_ok(c.cmd, 1500, &resp)) continue;
+        long total = -1;
+        if (parse_cpms_total(resp, total) && total <= 0) {
+            idf_logf("短信存储 %s 容量为 0，尝试下一候选", c.name);
+            continue;
+        }
+        // MT 是常规路径，成功时不打日志，避免每次初始化都刷一行
+        if (strcmp(c.name, "MT") != 0) idf_logf("短信存储使用 %s", c.name);
+        return true;
+    }
+    idf_log_line("警告: 无可用短信存储(MT/ME/SM 均不可用)，短信接收可能失败");
+    return false;
+}
+
+// 存储选择失败待补跑标志：冷启动时 CPMS 早于 SIM 就绪执行，SIM 初始化慢的开机
+// 可能三个候选全失败(SIM busy)。注册成功意味着 SIM 必已就绪，届时补跑一次。
+// 只在 modem_task 上下文读写，无需原子量。
+static bool s_sms_storage_pending = false;
+
+static void retry_sms_storage_if_pending(void)
+{
+    if (!s_sms_storage_pending) return;
+    idf_log_line("SIM 已就绪，补跑短信存储选择");
+    s_sms_storage_pending = !select_sms_storage();
+}
+
 static void configure_sms_and_registration(void)
 {
     send_ok("ATE0", 1000);
     send_ok("AT+CMGF=0", 1200);
     // 统一收/存/读的短信存储位置：CNMI mt=1 投递到 <mem3>，CMGL/CMGR 读 <mem1>，
-    // 两者不一致时 +CMTI 索引和补收轮询会看不同的存储，短信被静默丢失(对齐 Arduino)
-    if (!send_ok("AT+CPMS=\"MT\",\"MT\",\"MT\"", 1500)) {
-        send_ok("AT+CPMS=\"SM\",\"SM\",\"SM\"", 1500);
-    }
+    // 两者不一致时 +CMTI 索引和补收轮询会看不同的存储，短信被静默丢失
+    s_sms_storage_pending = !select_sms_storage();
     send_ok("AT+CNMI=2,1,0,0,0", 1200);
     send_ok("AT+CEREG=2", 1200);
     // 开启主叫号码上报：来电时模组主动上报 RING + +CLIP: "号码",...，供来电通知使用。
@@ -1846,6 +1898,7 @@ static void modem_task(void*)
     if (!registered) {
         set_phase("failed");
     } else {
+        retry_sms_storage_if_pending();
         IdfSimSettingsView cfg = idf_config_get_sim_settings_view();
         apply_operator_if_configured(cfg);
         if (cfg.dataEnabled) sample_cell_ip_once();
@@ -1923,6 +1976,7 @@ static void modem_task(void*)
                     dereg_count = 0;
                     if (!post_register_done) {
                         // 迟到/恢复的注册也要补跑必须的网络配置和首页基础信息。
+                        retry_sms_storage_if_pending();
                         IdfSimSettingsView cfg = idf_config_get_sim_settings_view();
                         apply_operator_if_configured(cfg);
                         if (cfg.dataEnabled) sample_cell_ip_once();
