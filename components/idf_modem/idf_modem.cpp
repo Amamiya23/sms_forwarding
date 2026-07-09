@@ -67,6 +67,7 @@ static int s_logged_rsrp = 999;
 static int s_logged_rsrq = 999;
 static int s_logged_sinr = 999;
 static bool s_logged_detail_valid = false;
+static std::atomic<int> s_logged_sms_storage_code{-1};  // -1=未知，0=MT，1=ME，2=SM
 static bool s_identity_static_attempted = false;
 static bool s_identity_network_attempted = false;
 static std::atomic<int64_t> s_last_web_poll_us{-WEB_POLL_ACTIVE_WINDOW_US};
@@ -1705,6 +1706,23 @@ static bool parse_cpms_total(const std::string& resp, long& total)
     return true;
 }
 
+static int sms_storage_code(const char* name)
+{
+    if (strcmp(name, "MT") == 0) return 0;
+    if (strcmp(name, "ME") == 0) return 1;
+    if (strcmp(name, "SM") == 0) return 2;
+    return -1;
+}
+
+static void log_sms_storage_if_changed(const char* name)
+{
+    int current = sms_storage_code(name);
+    int previous = s_logged_sms_storage_code.exchange(current, std::memory_order_relaxed);
+    if (previous == current) return;
+    // 首次 MT 是常规路径不提示；非 MT 或后续类型变化才记录，避免周期性 CPMS 重申刷屏。
+    if (previous != -1 || current != 0) idf_logf("短信存储使用 %s", name);
+}
+
 // 按优先级选择短信存储：MT → ME → SM。部分可写 eSIM 的 SM 存储返回 OK 但容量为
 // 0,0(issue #3)，此时短信实际无处可存，必须视为不可用并继续尝试下一候选；
 // 响应里解析不出容量的按可用处理(不同固件设置命令可能只回 OK)。
@@ -1723,8 +1741,7 @@ static bool select_sms_storage(void)
             idf_logf("短信存储 %s 容量为 0，尝试下一候选", c.name);
             continue;
         }
-        // MT 是常规路径，成功时不打日志，避免每次初始化都刷一行
-        if (strcmp(c.name, "MT") != 0) idf_logf("短信存储使用 %s", c.name);
+        log_sms_storage_if_changed(c.name);
         return true;
     }
     idf_log_line("警告: 无可用短信存储(MT/ME/SM 均不可用)，短信接收可能失败");
