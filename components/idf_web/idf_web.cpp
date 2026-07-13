@@ -33,7 +33,7 @@
 #include "idf_sms.h"
 #include "idf_wifi.h"
 #include "mbedtls/base64.h"
-#include "mbedtls/sha256.h"
+#include "psa/crypto.h"
 #include "nvs.h"
 #include "web_assets.h"
 
@@ -1805,11 +1805,10 @@ static esp_err_t handle_ota_update(httpd_req_t* req)
     size_t written = 0;
     char buf[1024];
     const size_t keep_tail = boundary_marker.size() + 8;
-    mbedtls_sha256_context sha_ctx;
+    psa_hash_operation_t sha_ctx = PSA_HASH_OPERATION_INIT;
     bool sha_active = !expected_sha256.empty();
     if (sha_active) {
-        mbedtls_sha256_init(&sha_ctx);
-        mbedtls_sha256_starts(&sha_ctx, 0);
+        if (psa_hash_setup(&sha_ctx, PSA_ALG_SHA_256) != PSA_SUCCESS) err = ESP_FAIL;
     }
 
     int timeouts = 0;
@@ -1852,9 +1851,12 @@ static esp_err_t handle_ota_update(httpd_req_t* req)
             err = esp_ota_write(ota, pending.data(), writable);
             if (err == ESP_OK) {
                 if (sha_active) {
-                    mbedtls_sha256_update(&sha_ctx,
-                                          reinterpret_cast<const unsigned char*>(pending.data()),
-                                          writable);
+                    if (psa_hash_update(&sha_ctx,
+                                        reinterpret_cast<const unsigned char*>(pending.data()),
+                                        writable) != PSA_SUCCESS) {
+                        err = ESP_FAIL;
+                        break;
+                    }
                 }
                 written += writable;
                 pending.erase(0, writable);
@@ -1875,11 +1877,13 @@ static esp_err_t handle_ota_update(httpd_req_t* req)
                 }
                 if (err == ESP_OK) {
                     if (sha_active) {
-                        mbedtls_sha256_update(&sha_ctx,
-                                              reinterpret_cast<const unsigned char*>(pending.data()),
-                                              boundary);
+                        if (psa_hash_update(&sha_ctx,
+                                            reinterpret_cast<const unsigned char*>(pending.data()),
+                                            boundary) != PSA_SUCCESS) {
+                            err = ESP_FAIL;
+                        }
                     }
-                    written += boundary;
+                    if (err == ESP_OK) written += boundary;
                 }
             }
             saw_boundary = true;
@@ -1889,14 +1893,16 @@ static esp_err_t handle_ota_update(httpd_req_t* req)
     if (err == ESP_OK && (!in_file || !saw_boundary || written == 0)) err = ESP_ERR_INVALID_SIZE;
     if (err == ESP_OK && sha_active) {
         unsigned char digest[32] = {};
-        mbedtls_sha256_finish(&sha_ctx, digest);
-        std::string actual = hex_lower(digest, sizeof(digest));
-        if (actual != expected_sha256) {
+        size_t digest_len = 0;
+        if (psa_hash_finish(&sha_ctx, digest, sizeof(digest), &digest_len) != PSA_SUCCESS ||
+            digest_len != sizeof(digest)) {
+            err = ESP_FAIL;
+        } else if (hex_lower(digest, digest_len) != expected_sha256) {
             sha_mismatch = true;
             err = ESP_ERR_INVALID_CRC;
         }
     }
-    if (sha_active) mbedtls_sha256_free(&sha_ctx);
+    if (sha_active) psa_hash_abort(&sha_ctx);
     if (err == ESP_OK) err = esp_ota_end(ota);
     else esp_ota_abort(ota);
     if (err == ESP_OK) err = esp_ota_set_boot_partition(part);

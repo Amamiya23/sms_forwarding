@@ -32,13 +32,12 @@
 #include "idf_modem.h"
 #include "idf_wifi.h"
 #include "mbedtls/base64.h"
-#include "mbedtls/ctr_drbg.h"
 #include "mbedtls/error.h"
-#include "mbedtls/md.h"
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/ssl.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
+#include "psa/crypto.h"
 
 static constexpr size_t PUSH_QUEUE_MAX = 16;
 static constexpr size_t FWD_QUEUE_MAX = 10;
@@ -398,14 +397,26 @@ static std::string url_encode(const std::string& value)
 static std::string hmac_sha256_base64(const std::string& data, const std::string& key)
 {
     unsigned char hmac[32] = {};
-    mbedtls_md_context_t ctx;
-    mbedtls_md_init(&ctx);
-    const mbedtls_md_info_t* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-    mbedtls_md_setup(&ctx, info, 1);
-    mbedtls_md_hmac_starts(&ctx, reinterpret_cast<const unsigned char*>(key.data()), key.size());
-    mbedtls_md_hmac_update(&ctx, reinterpret_cast<const unsigned char*>(data.data()), data.size());
-    mbedtls_md_hmac_finish(&ctx, hmac);
-    mbedtls_md_free(&ctx);
+    size_t hmac_len = 0;
+    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_SIGN_MESSAGE);
+    psa_set_key_algorithm(&attributes, PSA_ALG_HMAC(PSA_ALG_SHA_256));
+    psa_set_key_type(&attributes, PSA_KEY_TYPE_HMAC);
+
+    psa_key_id_t key_id = PSA_KEY_ID_NULL;
+    psa_status_t status = psa_import_key(
+        &attributes,
+        reinterpret_cast<const unsigned char*>(key.data()), key.size(),
+        &key_id);
+    psa_reset_key_attributes(&attributes);
+    if (status != PSA_SUCCESS) return {};
+
+    status = psa_mac_compute(
+        key_id, PSA_ALG_HMAC(PSA_ALG_SHA_256),
+        reinterpret_cast<const unsigned char*>(data.data()), data.size(),
+        hmac, sizeof(hmac), &hmac_len);
+    psa_destroy_key(key_id);
+    if (status != PSA_SUCCESS || hmac_len != sizeof(hmac)) return {};
 
     unsigned char out[64] = {};
     size_t out_len = 0;
@@ -746,16 +757,12 @@ struct SmtpConn {
     mbedtls_net_context net;
     mbedtls_ssl_context ssl;
     mbedtls_ssl_config conf;
-    mbedtls_ctr_drbg_context ctrDrbg;
-    mbedtls_entropy_context entropy;
 
     SmtpConn()
     {
         mbedtls_net_init(&net);
         mbedtls_ssl_init(&ssl);
         mbedtls_ssl_config_init(&conf);
-        mbedtls_ctr_drbg_init(&ctrDrbg);
-        mbedtls_entropy_init(&entropy);
     }
 };
 
@@ -771,8 +778,6 @@ static void smtp_conn_close(SmtpConn& conn)
     }
     mbedtls_ssl_free(&conn.ssl);
     mbedtls_ssl_config_free(&conn.conf);
-    mbedtls_ctr_drbg_free(&conn.ctrDrbg);
-    mbedtls_entropy_free(&conn.entropy);
     if (conn.sock >= 0) {
         close(conn.sock);
         conn.sock = -1;
@@ -862,20 +867,12 @@ static bool smtp_tcp_connect(const std::string& host, int port, SmtpConn& conn)
 
 static bool smtp_starttls_upgrade(SmtpConn& conn, const std::string& host)
 {
-    const char* pers = "sms-smtp-starttls";
-    int ret = mbedtls_ctr_drbg_seed(&conn.ctrDrbg, mbedtls_entropy_func, &conn.entropy,
-                                    reinterpret_cast<const unsigned char*>(pers), strlen(pers));
-    if (ret != 0) {
-        idf_logf("STARTTLS随机源初始化失败: -0x%04x", -ret);
-        return false;
-    }
-    ret = mbedtls_ssl_config_defaults(&conn.conf, MBEDTLS_SSL_IS_CLIENT,
-                                      MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
+    int ret = mbedtls_ssl_config_defaults(&conn.conf, MBEDTLS_SSL_IS_CLIENT,
+                                          MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
     if (ret != 0) {
         idf_logf("STARTTLS配置初始化失败: -0x%04x", -ret);
         return false;
     }
-    mbedtls_ssl_conf_rng(&conn.conf, mbedtls_ctr_drbg_random, &conn.ctrDrbg);
     mbedtls_ssl_conf_authmode(&conn.conf, MBEDTLS_SSL_VERIFY_REQUIRED);
     if (esp_crt_bundle_attach(&conn.conf) != ESP_OK) {
         idf_log_line("STARTTLS证书包挂载失败");

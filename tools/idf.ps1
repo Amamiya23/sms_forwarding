@@ -5,6 +5,7 @@ param(
     [string]$Port = 'COM5',
     [string]$IdfPath = $env:IDF_PATH,
     [string]$IdfToolsPath = $env:IDF_TOOLS_PATH,
+    [string]$IdfPythonEnvPath = $env:IDF_PYTHON_ENV_PATH,
     [int]$Jobs = 0
 )
 
@@ -14,8 +15,38 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $BuildDir = Join-Path $RepoRoot 'build\idf'
 $SdkConfig = Join-Path $RepoRoot 'build\sdkconfig'
 
+$eimConfigCandidates = @('C:\Espressif\tools\eim_idf.json')
+if (-not [string]::IsNullOrWhiteSpace($IdfToolsPath)) {
+    $eimConfigCandidates = @((Join-Path $IdfToolsPath 'eim_idf.json')) + $eimConfigCandidates
+}
+
+$eimInstall = $null
+foreach ($configPath in $eimConfigCandidates | Select-Object -Unique) {
+    if (-not (Test-Path -LiteralPath $configPath)) { continue }
+    try {
+        $eimConfig = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+        if (-not [string]::IsNullOrWhiteSpace($IdfPath)) {
+            $eimInstall = $eimConfig.idfInstalled | Where-Object { $_.path -eq $IdfPath } | Select-Object -First 1
+        }
+        if (-not $eimInstall) {
+            $eimInstall = $eimConfig.idfInstalled | Where-Object { $_.id -eq $eimConfig.idfSelectedId } | Select-Object -First 1
+        }
+        if ($eimInstall) { break }
+    } catch {
+        Write-Warning "Ignoring invalid EIM metadata ${configPath}: $($_.Exception.Message)"
+    }
+}
+
+if ($eimInstall) {
+    if ([string]::IsNullOrWhiteSpace($IdfPath)) { $IdfPath = $eimInstall.path }
+    if ([string]::IsNullOrWhiteSpace($IdfToolsPath)) { $IdfToolsPath = $eimInstall.idfToolsPath }
+    if ([string]::IsNullOrWhiteSpace($IdfPythonEnvPath) -and $eimInstall.python) {
+        $IdfPythonEnvPath = Split-Path -Parent (Split-Path -Parent $eimInstall.python)
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($IdfPath)) {
-    $IdfPath = 'E:\Espressif\esp-idf-v5.5.4'
+    $IdfPath = 'E:\Espressif\esp-idf-v6.0.2'
 }
 if ([string]::IsNullOrWhiteSpace($IdfToolsPath)) {
     $IdfToolsPath = 'E:\Espressif\.espressif'
@@ -28,8 +59,18 @@ if (-not (Test-Path -LiteralPath $ExportScript)) {
 
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 
-$env:IDF_TOOLS_PATH = $IdfToolsPath
-. $ExportScript
+$useEimActivation = $eimInstall -and
+    (Test-Path -LiteralPath $eimInstall.activationScript) -and
+    ($eimInstall.path -eq $IdfPath)
+if ($useEimActivation) {
+    . $eimInstall.activationScript
+} else {
+    $env:IDF_TOOLS_PATH = $IdfToolsPath
+    if (-not [string]::IsNullOrWhiteSpace($IdfPythonEnvPath)) {
+        $env:IDF_PYTHON_ENV_PATH = $IdfPythonEnvPath
+    }
+    . $ExportScript
+}
 
 $IdfArgs = @('-B', $BuildDir, '-D', "SDKCONFIG=$SdkConfig")
 
