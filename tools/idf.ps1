@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('build', 'flash', 'monitor', 'reconfigure', 'clean', 'fullclean')]
+    [ValidateSet('build', 'buildflash', 'all', 'flash', 'monitor', 'reconfigure', 'clean', 'fullclean')]
     [string]$Action = 'build',
     [string]$Port = 'COM5',
     [string]$IdfPath = $env:IDF_PATH,
@@ -79,14 +79,25 @@ if ($useEimActivation) {
 
 $IdfArgs = @('-B', $BuildDir, '-D', "SDKCONFIG=$SdkConfig")
 
+if ($Jobs -le 0) {
+    $Jobs = [int]$env:NUMBER_OF_PROCESSORS
+    if ($Jobs -le 0) { $Jobs = 4 }
+}
+
 switch ($Action) {
     'build' {
         idf.py @IdfArgs reconfigure
-        if ($Jobs -le 0) {
-            $Jobs = [int]$env:NUMBER_OF_PROCESSORS
-            if ($Jobs -le 0) { $Jobs = 4 }
-        }
         ninja -C $BuildDir -j $Jobs
+    }
+    'buildflash' {
+        idf.py @IdfArgs reconfigure
+        ninja -C $BuildDir -j $Jobs
+        idf.py @IdfArgs -p $Port flash
+    }
+    'all' {
+        idf.py @IdfArgs reconfigure
+        ninja -C $BuildDir -j $Jobs
+        idf.py @IdfArgs -p $Port flash monitor
     }
     'flash' {
         idf.py @IdfArgs -p $Port flash
