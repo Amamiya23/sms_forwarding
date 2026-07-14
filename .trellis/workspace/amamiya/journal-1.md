@@ -38,3 +38,36 @@ Migrated MbedTLS crypto paths to PSA APIs, added EIM-aware builds, updated CI/do
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: SMTP HTML 邮件模板与预览
+
+**Date**: 2026-07-14
+**Task**: SMTP HTML 邮件模板与预览
+**Branch**: `master`
+
+### Summary
+
+实现五类可编辑邮件模板、multipart/alternative SMTP、Dashboard 沙箱预览、模板持久化与备份恢复，并沉淀 ESP-IDF 6.0.2 构建排障契约。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c9ad140` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
