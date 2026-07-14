@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "idf_email.h"
 #include "idf_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -608,7 +609,7 @@ std::string idf_config_export_text(bool full_export)
 {
     IdfConfig c = idf_config_get();
     std::string out;
-    out.reserve(4096);
+    out.reserve(32768);
 
     // 槽位 0 用旧键名导出，旧固件也能导入最近配网的网络；其余槽位用 wifiNSsid/Pass
     append_kv(out, "wifiSsid", c.wifiNetworks[0].ssid);
@@ -698,6 +699,7 @@ std::string idf_config_export_text(bool full_export)
         snprintf(key, sizeof(key), "st%dLast", i);
         append_kv_u32(out, key, t.lastRun);
     }
+    for (const auto& item : idf_email_export_overrides()) append_kv(out, item.first.c_str(), item.second);
     return out;
 }
 
@@ -789,6 +791,7 @@ esp_err_t idf_config_import_text(const std::string& text, int* applied_count)
     if (text.empty()) return ESP_ERR_INVALID_ARG;
     IdfConfig base = idf_config_get();
     IdfConfig next = base;
+    std::vector<std::pair<std::string, std::string>> email_templates;
     int applied = 0;
     size_t pos = 0;
     while (pos <= text.size()) {
@@ -804,7 +807,18 @@ esp_err_t idf_config_import_text(const std::string& text, int* applied_count)
             size_t keep = key.find_last_not_of(" \t\r\n");
             if (keep != std::string::npos) key.erase(keep + 1);
             if (!key.empty()) {
-                apply_import_key(next, key, value);
+                bool recognized = false;
+                std::string template_error;
+                bool valid_template = idf_email_import_key(key, value, template_error, recognized, false);
+                if (recognized) {
+                    if (!valid_template) {
+                        idf_logf("导入邮件模板失败: %s", template_error.c_str());
+                        return ESP_ERR_INVALID_ARG;
+                    }
+                    email_templates.emplace_back(key, value);
+                } else {
+                    apply_import_key(next, key, value);
+                }
                 ++applied;
             }
         }
@@ -814,6 +828,17 @@ esp_err_t idf_config_import_text(const std::string& text, int* applied_count)
 
     next.wifiFromFallback = false;
     esp_err_t err = commit_config_update(next, base);
+    if (err == ESP_OK) {
+        for (const auto& item : email_templates) {
+            bool recognized = false;
+            std::string template_error;
+            if (!idf_email_import_key(item.first, item.second, template_error, recognized, true)) {
+                idf_logf("写入邮件模板失败: %s", template_error.c_str());
+                err = ESP_FAIL;
+                break;
+            }
+        }
+    }
     if (err == ESP_OK && applied_count) *applied_count = applied;
     return err;
 }
@@ -828,6 +853,7 @@ esp_err_t idf_config_factory_reset(void)
     err = nvs_open("sms_config", NVS_READWRITE, &nvs);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         err = replace_config(IdfConfig());
+        if (err == ESP_OK) err = idf_email_reset_all_templates();
         xSemaphoreGive(s_persist_mutex);
         return err;
     }
@@ -846,6 +872,7 @@ esp_err_t idf_config_factory_reset(void)
             idf_log_line("配置已恢复出厂设置");
         }
     }
+    if (err == ESP_OK) err = idf_email_reset_all_templates();
     xSemaphoreGive(s_persist_mutex);
     return err;
 }

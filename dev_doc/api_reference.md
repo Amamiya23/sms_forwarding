@@ -145,20 +145,19 @@
 
 ---
 
-## 模块: push.cpp — 推送与邮件
+## 模块: idf_email / idf_push — 邮件模板与发送
 
-### `void sendEmailNotification(const char* subject, const char* body)`
-**前提检查**: SMTP 四个字段均非空，否则打印跳过日志。
+### `bool idf_email_render(const IdfEmailData&, IdfRenderedEmail&, std::string&)`
 
-**实现**:
-1. 创建 `smtp.connect(server, port, callback)`
-2. `smtp.authenticate(user, pass, readymail_auth_password)`
-3. 构造 `SMTPMessage`，设置 from/to/subject/body/timestamp
-4. `smtp.send(msg)`
+按 `Sms`、`Call`、`Heartbeat`、`Keepalive`、`System` 类型读取共享基础模板、类型正文和 Subject。动态字段只做一次替换，插入 HTML 前转义；渲染失败时回退固件默认模板。输出包含 `subject`、`plain` 和 `html`。
 
-**from 格式**: `"sms notify <user@example.com>"`  
-**to 格式**: `"your_email <receiver@example.com>"`  
-**timestamp**: 使用 `time(nullptr)`（需 NTP 已同步）
+模板覆盖存放在 `smsdata/mailtpl`。基础模板必须包含 `{content}`，正文必须包含该类型的主信息字段；保存会拒绝无效 UTF-8、超限模板、脚本、iframe、表单、事件处理器、`javascript:` 和 meta refresh。
+
+### `bool idf_push_enqueue_email_data(const IdfEmailData& data)`
+
+将结构化字段放入邮件队列，worker 真正发送前读取最新模板。SMTP 四项配置不完整时拒绝入队；发送失败沿用原有退避重试和完成状态更新。
+
+SMTP DATA 使用 UTF-8 `multipart/alternative`：第一部分是 base64 `text/plain`，第二部分是 base64 `text/html`。Subject 过滤 CR/LF、按 UTF-8 边界限长并使用 RFC 2047 编码。
 
 ---
 
@@ -353,6 +352,23 @@ HTTP Basic Authentication，账号密码来自 `config.webUser` / `config.webPas
 
 ### `void handleSave()`
 解析 POST 表单 → 写入 `config`（写入区在 `gWorkMux` 内，与 worker 的快照读互斥）→ `saveConfig()` → 重新校验 → **快速返回**成功页面（3 秒跳转）。**不发送通知邮件**（避免 SMTP 阻塞前端；连通性请用各通道“测试推送”验证）。
+
+---
+
+### 邮件模板 HTTP API
+
+所有接口需要 HTTP Basic Auth；POST/DELETE 以及预览 POST 还需要 `X-SMS-CSRF: 1`。
+
+| 方法与路径 | 行为 |
+|---|---|
+| `GET /emailtemplate?part=base&kind=sms` | 读取共享基础模板；`kind` 仅选择预览类型 |
+| `GET /emailtemplate?part=body&kind=sms` | 读取指定类型正文、占位符、大小限制和自定义状态 |
+| `GET /emailtemplate?part=subject&kind=sms` | 读取指定类型 Subject |
+| `POST /emailtemplate?...` | 以原始 UTF-8 请求体校验并保存一个部件 |
+| `DELETE /emailtemplate?...` | 删除覆盖，恢复固件默认值 |
+| `POST /emailpreview?...` | 用代表性样例和实际渲染器预览未保存部件，返回 `subject/html/plain` |
+
+`kind` 可取 `sms`、`call`、`heartbeat`、`keepalive`、`system`。基础模板上限 8192B，正文 4096B，Subject 256B。
 
 ---
 

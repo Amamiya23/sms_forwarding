@@ -6,13 +6,18 @@ param(
     [string]$IdfPath = $env:IDF_PATH,
     [string]$IdfToolsPath = $env:IDF_TOOLS_PATH,
     [string]$IdfPythonEnvPath = $env:IDF_PYTHON_ENV_PATH,
+    [string]$BuildDir = '',
     [int]$Jobs = 0
 )
 
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$BuildDir = Join-Path $RepoRoot 'build\idf'
+if ([string]::IsNullOrWhiteSpace($BuildDir)) {
+    $BuildDir = Join-Path $RepoRoot 'build\idf'
+} elseif (-not [System.IO.Path]::IsPathRooted($BuildDir)) {
+    $BuildDir = Join-Path $RepoRoot $BuildDir
+}
 $SdkConfig = Join-Path $RepoRoot 'build\sdkconfig'
 
 $eimConfigCandidates = @('C:\Espressif\tools\eim_idf.json')

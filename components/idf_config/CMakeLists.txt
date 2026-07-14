@@ -3,6 +3,7 @@ idf_component_register(
   INCLUDE_DIRS "include"
   REQUIRES
     freertos
+    idf_email
     idf_logbuf
     nvs_flash
 )

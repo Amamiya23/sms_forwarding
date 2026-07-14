@@ -45,9 +45,11 @@ ESP32-C3 + ML307 系列 4G/LTE 模组的轻量短信转发固件。设备通过 
 
 邮件通道：
 
-- SMTP 邮件通知。
+- SMTP 邮件使用 `multipart/alternative`，同时发送 UTF-8 纯文本和 HTML 正文。
 - 支持服务器、端口、账号、授权码、收件人配置。
 - 授权码留空保存时会保留旧值，避免误清空。
+- Dashboard 可完整编辑共享基础 HTML/CSS，并分别编辑短信、来电、每日心跳、保号结果和系统通知的正文与 Subject；支持占位符插入、实时沙箱预览和恢复默认。
+- 模板保存会校验必需占位符、UTF-8、大小和主动内容；运行时异常会自动回退到固件内置模板。
 
 推送通道类型：
 
@@ -283,6 +285,18 @@ cd E:\GitHub-Repo\sms_forwarding
 powershell -ExecutionPolicy Bypass -File tools\idf.ps1 build
 ```
 
+如果自动识别到了错误的 ESP-IDF 安装，或现有 `build/idf` 曾被其他 CMake 生成器使用，可显式指定本机 ESP-IDF 6.0.2 环境并换用新的构建目录：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\idf.ps1 build `
+  -IdfPath 'C:\tools\esp\.espressif\v6.0.2\esp-idf' `
+  -IdfToolsPath 'C:\Espressif\tools' `
+  -IdfPythonEnvPath 'C:\Espressif\tools\python\v6.0.2\venv' `
+  -BuildDir 'build\idf-local' -Jobs 4
+```
+
+不要直接对工程运行裸 `cmake -B build/idf`。Windows 上它可能选择 Visual Studio 生成器，导致后续 ESP-IDF 所需的 Ninja 与缓存冲突。指定 `-BuildDir` 后，固件位于对应目录，例如 `build/idf-local/sms_forwarding_idf.bin`。
+
 如果只改了 Web UI 源码，构建前先重新生成静态资源：
 
 ```powershell
@@ -293,7 +307,12 @@ python tools\build_web_assets.py --check
 ### 4. 烧录到 ESP32-C3
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\idf.ps1 flash -Port COM5
+powershell -ExecutionPolicy Bypass -File tools\idf.ps1 flash `
+  -Port COM22 `
+  -BuildDir 'build\idf-email' `
+  -IdfPath 'C:\tools\esp\.espressif\v6.0.2\esp-idf' `
+  -IdfToolsPath 'C:\Espressif\tools' `
+  -IdfPythonEnvPath 'C:\Espressif\tools\python\v6.0.2\venv'
 ```
 
 如果自动进入下载模式失败，可以按住开发板 `BOOT`，轻点 `RST/EN`，开始烧录后松开 `BOOT`。不同 ESP32-C3 开发板按钮名称可能不同，以板子丝印为准。

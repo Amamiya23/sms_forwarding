@@ -6,7 +6,11 @@
 
 ## components/idf_config
 
-负责 `IdfConfig` 的 NVS 读写、表单保存、导入导出、恢复出厂、Web Auth 校验和 keepalive 基准日更新。配置访问使用互斥保护和快照，避免 Web 保存与后台 worker 并发撕裂。
+负责 `IdfConfig` 的 NVS 读写、表单保存、导入导出、恢复出厂、Web Auth 校验和 keepalive 基准日更新。配置导入导出包含邮件模板覆盖，恢复出厂时同时清除模板。配置访问使用互斥保护和快照，避免 Web 保存与后台 worker 并发撕裂。
+
+## components/idf_email
+
+负责五类邮件的默认模板、共享基础 HTML/CSS、占位符校验与单次替换、HTML 转义、纯文本降级正文和模板持久化。自定义覆盖以 blob 存放在 `smsdata` 分区的 `mailtpl` 命名空间；基础模板、单类正文和 Subject 上限分别为 8192、4096 和 256 字节。缺少覆盖时读取固件默认值，运行时模板无效时回退内置默认模板。
 
 ## components/idf_wifi
 
@@ -22,11 +26,11 @@
 
 ## components/idf_push
 
-负责转发规则、推送队列、邮件队列、失败重试、通道冷却、测试推送和 10 类推送渠道。慢速 HTTP/HTTPS/SMTP 只在 worker 中执行。
+负责转发规则、推送队列、结构化邮件队列、失败重试、通道冷却、测试推送和 10 类推送渠道。SMTP 在发送前按短信、来电、心跳、保号或系统类型渲染最新模板，并发送 UTF-8 `multipart/alternative` 纯文本/HTML 邮件。慢速 HTTP/HTTPS/SMTP 只在 worker 中执行。
 
 ## components/idf_web
 
-负责 `esp_http_server` 路由、Basic Auth、静态 Web UI、状态 JSON、配置保存、日志、收件箱 API、OTA、诊断、AT 终端、保号任务和 scheduler。
+负责 `esp_http_server` 路由、Basic Auth、静态 Web UI、状态 JSON、配置保存、邮件模板读取/保存/重置/预览、日志、收件箱 API、OTA、诊断、AT 终端、保号任务和 scheduler。模板写入与预览接口要求 CSRF 头，预览结果由无脚本权限的 sandbox iframe 展示。
 
 ## components/idf_logbuf / idf_inbox
 

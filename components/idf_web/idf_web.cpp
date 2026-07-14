@@ -25,6 +25,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "idf_config.h"
+#include "idf_email.h"
 #include "idf_esim.h"
 #include "idf_inbox.h"
 #include "idf_log.h"
@@ -841,6 +842,170 @@ static bool get_query_param(httpd_req_t* req, const char* key, std::string& out,
     if (httpd_query_key_value(query.c_str(), key, raw, sizeof(raw)) != ESP_OK) return false;
     out = url_decode(raw, strlen(raw));
     return true;
+}
+
+static bool parse_email_template_query(httpd_req_t* req, IdfEmailTemplatePart& part,
+                                       IdfEmailKind& kind, std::string& message)
+{
+    std::string part_text;
+    if (!get_query_param(req, "part", part_text) || !idf_email_parse_part(part_text, part)) {
+        message = "模板部件无效";
+        return false;
+    }
+    kind = IdfEmailKind::Sms;
+    if (part != IdfEmailTemplatePart::Base) {
+        std::string kind_text;
+        if (!get_query_param(req, "kind", kind_text) || !idf_email_parse_kind(kind_text, kind)) {
+            message = "邮件类型无效";
+            return false;
+        }
+    } else {
+        std::string kind_text;
+        if (get_query_param(req, "kind", kind_text) && !idf_email_parse_kind(kind_text, kind)) {
+            message = "邮件类型无效";
+            return false;
+        }
+    }
+    return true;
+}
+
+static void send_email_api_error(httpd_req_t* req, const std::string& message,
+                                 const char* status = "400 Bad Request")
+{
+    set_json_no_cache(req);
+    httpd_resp_set_status(req, status);
+    std::string body = "{\"success\":false,\"message\":\"";
+    json_escape_append(body, message);
+    body += "\"}";
+    httpd_resp_send(req, body.c_str(), body.size());
+}
+
+static IdfEmailData email_preview_sample(IdfEmailKind kind)
+{
+    IdfEmailData data;
+    data.kind = kind;
+    data.timestamp = "2026-07-13 19:29:47 UTC+8";
+    data.receiver = "+19447568288020";
+    data.title = "系统通知";
+    data.message = "设备运行状态正常。";
+    switch (kind) {
+        case IdfEmailKind::Sms:
+            data.title = "短信通知";
+            data.sender = "+2289063869";
+            data.message = "<#> 您的 WhatsApp 验证码: 892-279\n请不要与其他人共享这个密码\nxxxxxxxxx";
+            break;
+        case IdfEmailKind::Call:
+            data.title = "来电提醒";
+            data.caller = "+447700900456";
+            break;
+        case IdfEmailKind::Heartbeat:
+            data.title = "设备每日心跳";
+            data.message = "设备运行正常。";
+            data.smsTotal = 128;
+            data.freeHeapKb = 196;
+            break;
+        case IdfEmailKind::Keepalive:
+            data.title = "保号动作已执行";
+            data.message = "保号动作已成功执行。";
+            data.action = "USSD 查询";
+            data.result = "余额查询成功，已更新保号基准日";
+            break;
+        case IdfEmailKind::System:
+            data.title = "定时任务已执行";
+            data.message = "任务: 月度检查\n动作: 推送提醒\n结果: 成功";
+            break;
+    }
+    return data;
+}
+
+static esp_err_t handle_email_template(httpd_req_t* req)
+{
+    if (!check_auth(req)) return ESP_OK;
+    IdfEmailTemplatePart part;
+    IdfEmailKind kind;
+    std::string message;
+    if (!parse_email_template_query(req, part, kind, message)) {
+        send_email_api_error(req, message);
+        return ESP_OK;
+    }
+    if (req->method == HTTP_GET) {
+        set_json_no_cache(req);
+        IdfEmailTemplateValue current = idf_email_get_template(part, kind);
+        std::string body = "{\"success\":true,";
+        json_prop(body, "part", idf_email_part_name(part)); body += ",";
+        json_prop(body, "kind", idf_email_kind_name(kind)); body += ",";
+        json_prop(body, "value", current.value); body += ",";
+        body += "\"customized\":";
+        body += current.customized ? "true" : "false";
+        body += ",\"maxBytes\":" + std::to_string(current.maxBytes) + ",\"placeholders\":[";
+        std::vector<std::string> placeholders = part == IdfEmailTemplatePart::Base
+                                                    ? std::vector<std::string>{"{content}"}
+                                                    : idf_email_placeholders(kind);
+        for (size_t i = 0; i < placeholders.size(); ++i) {
+            if (i) body += ",";
+            body += "\"";
+            json_escape_append(body, placeholders[i]);
+            body += "\"";
+        }
+        body += "]}";
+        return httpd_resp_send(req, body.c_str(), body.size());
+    }
+    if (!check_csrf(req)) return ESP_OK;
+    if (req->method == HTTP_DELETE) {
+        esp_err_t err = idf_email_reset_template(part, kind);
+        if (err != ESP_OK) send_email_api_error(req, esp_err_to_name(err), "500 Internal Server Error");
+        else {
+            set_json_no_cache(req);
+            httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"已恢复默认模板\"}");
+        }
+        return ESP_OK;
+    }
+    if (req->method != HTTP_POST) {
+        send_email_api_error(req, "该接口只支持 GET、POST、DELETE", "405 Method Not Allowed");
+        return ESP_OK;
+    }
+    IdfEmailTemplateValue current = idf_email_get_template(part, kind);
+    std::string value;
+    if (read_body(req, value, current.maxBytes) != ESP_OK) return ESP_OK;
+    esp_err_t err = idf_email_save_template(part, kind, value, message);
+    if (err != ESP_OK) send_email_api_error(req, message);
+    else {
+        set_json_no_cache(req);
+        httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"模板已保存\"}");
+    }
+    return ESP_OK;
+}
+
+static esp_err_t handle_email_preview(httpd_req_t* req)
+{
+    if (!check_auth(req)) return ESP_OK;
+    if (!check_csrf(req)) return ESP_OK;
+    if (req->method != HTTP_POST) {
+        send_email_api_error(req, "预览接口只支持 POST", "405 Method Not Allowed");
+        return ESP_OK;
+    }
+    IdfEmailTemplatePart part;
+    IdfEmailKind kind;
+    std::string message;
+    if (!parse_email_template_query(req, part, kind, message)) {
+        send_email_api_error(req, message);
+        return ESP_OK;
+    }
+    IdfEmailTemplateValue current = idf_email_get_template(part, kind);
+    std::string value;
+    if (read_body(req, value, current.maxBytes) != ESP_OK) return ESP_OK;
+    IdfRenderedEmail rendered;
+    if (!idf_email_preview(part, kind, value, email_preview_sample(kind), rendered, message)) {
+        send_email_api_error(req, message);
+        return ESP_OK;
+    }
+    set_json_no_cache(req);
+    std::string body = "{\"success\":true,";
+    json_prop(body, "subject", rendered.subject); body += ",";
+    json_prop(body, "html", rendered.html); body += ",";
+    json_prop(body, "plain", rendered.plain);
+    body += "}";
+    return httpd_resp_send(req, body.c_str(), body.size());
 }
 
 static std::string first_line_containing(const std::string& resp, const char* needle)
@@ -2483,8 +2648,11 @@ static std::string keepalive_profile_note(const IdfKeepaliveRunView& cfg)
     return std::string("目标 eSIM: ") + idf_esim_mask_profile_id(cfg.kaProfile);
 }
 
-static void enqueue_maintenance_notice(int tz_offset_min, bool email_enabled, const char* title,
-                                       const std::string& body, uint32_t now)
+static void enqueue_maintenance_notice(int tz_offset_min, bool email_enabled, IdfEmailKind email_kind,
+                                       const char* title, const std::string& body, uint32_t now,
+                                       const std::string& action = std::string(),
+                                       const std::string& result = std::string(),
+                                       uint32_t sms_total = 0, uint32_t free_heap_kb = 0)
 {
     std::string ts = format_epoch_local(now, tz_offset_min);
     int pushed = idf_push_enqueue_notify(title, body.c_str(), ts.c_str());
@@ -2492,7 +2660,16 @@ static void enqueue_maintenance_notice(int tz_offset_min, bool email_enabled, co
     else idf_logf("%s无有效推送通道", title);
 
     if (!email_enabled) return;
-    idf_push_enqueue_email(title, body.c_str());
+    IdfEmailData data;
+    data.kind = email_kind;
+    data.title = title ? title : "系统通知";
+    data.message = body;
+    data.timestamp = ts;
+    data.action = action;
+    data.result = result.empty() ? body : result;
+    data.smsTotal = sms_total;
+    data.freeHeapKb = free_heap_kb;
+    idf_push_enqueue_email_data(data);
 }
 
 static void keepalive_set_job_message(const std::string& message)
@@ -2714,7 +2891,9 @@ static void keepalive_task(void* arg_raw)
         std::string notice = "保号动作已成功执行。\n方式: ";
         notice += (cfg.kaAction == 2 ? "发送短信" : (cfg.kaAction == 3 ? "USSD 查询" : "蜂窝数据流量"));
         notice += "\n结果: " + message;
-        enqueue_maintenance_notice(cfg.tzOffsetMin, cfg.emailEnabled, "保号动作已执行", notice, now);
+        std::string action = cfg.kaAction == 2 ? "发送短信" : (cfg.kaAction == 3 ? "USSD 查询" : "蜂窝数据流量");
+        enqueue_maintenance_notice(cfg.tzOffsetMin, cfg.emailEnabled, IdfEmailKind::Keepalive,
+                                   "保号动作已执行", notice, now, action, message);
     } else {
         idf_logf("保号动作失败: %s", message.c_str());
         // 带切卡的保号失败改为次日重试：每小时重试意味着反复切卡+模组重启，
@@ -2980,7 +3159,7 @@ static void sched_task_worker(void* arg_raw)
         std::string notice = "任务: " + label +
             "\n动作: " + std::string(sched_action_name(t.action)) +
             "\n结果: " + (message.empty() ? (ok ? "成功" : "失败") : message);
-        enqueue_maintenance_notice(cfg.tzOffsetMin, cfg.emailEnabled,
+        enqueue_maintenance_notice(cfg.tzOffsetMin, cfg.emailEnabled, IdfEmailKind::System,
                                    ok ? "定时任务已执行" : "定时任务失败", notice, now);
     }
 
@@ -3171,7 +3350,10 @@ static void scheduler_task(void*)
                 snprintf(body, sizeof(body), "设备运行正常。\n累计转发: %u 条\n空闲堆: %u KB",
                          static_cast<unsigned>(sms.total),
                          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024U));
-                enqueue_maintenance_notice(cfg.tzOffsetMin, cfg.emailEnabled, "设备每日心跳", body, now);
+                uint32_t free_heap_kb = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024U);
+                enqueue_maintenance_notice(cfg.tzOffsetMin, cfg.emailEnabled, IdfEmailKind::Heartbeat,
+                                           "设备每日心跳", body, now, std::string(), std::string(),
+                                           sms.total, free_heap_kb);
             }
 
             uint64_t uptime_ms = static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
@@ -3808,6 +3990,8 @@ esp_err_t idf_web_start(void)
     IDF_WEB_TRY_REGISTER("/status", httpd_register_uri_handler(s_server, &status));
     IDF_WEB_TRY_REGISTER("/config.json", httpd_register_uri_handler(s_server, &config_json));
     IDF_WEB_TRY_REGISTER("/save", httpd_register_uri_handler(s_server, &save));
+    IDF_WEB_TRY_REGISTER("/emailtemplate", register_handler(s_server, "/emailtemplate", HTTP_ANY, handle_email_template));
+    IDF_WEB_TRY_REGISTER("/emailpreview", register_handler(s_server, "/emailpreview", HTTP_POST, handle_email_preview));
     IDF_WEB_TRY_REGISTER("/wifi", register_handler(s_server, "/wifi", HTTP_ANY, handle_wifi));
     IDF_WEB_TRY_REGISTER("/ntp", register_handler(s_server, "/ntp", HTTP_POST, handle_ntp));
     IDF_WEB_TRY_REGISTER("/wifiscan", httpd_register_uri_handler(s_server, &wifi_scan));

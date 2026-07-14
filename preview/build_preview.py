@@ -211,6 +211,21 @@ mock_log = [
     "[Bark 自建] HTTP 响应码: 200",
 ]
 
+mock_email_templates = {
+    "base": "<!doctype html><html><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>body{margin:0;background:#f3f5f7;font-family:Arial,sans-serif;color:#20262d}.shell{padding:28px 12px}.card{max-width:600px;margin:auto;background:#fff;border:1px solid #dfe4e8;border-radius:8px;overflow:hidden}.top,.foot{padding:16px 22px;color:#66717d;font-size:12px}.top{border-bottom:1px solid #e7ebee}.foot{border-top:1px solid #e7ebee}.content{padding:24px}.meta{width:100%;border-collapse:collapse}.meta td{padding:8px 0;border-bottom:1px solid #edf0f2}.label{width:90px;color:#707a84}.message{margin-top:18px;padding:16px;border-left:4px solid #168b83;background:#f0f8f7;line-height:1.7}</style></head><body><div class=\"shell\"><div class=\"card\"><div class=\"top\">SMS Forwarding</div><div class=\"content\">{content}</div><div class=\"foot\">此邮件由短信转发设备自动发送。</div></div></div></body></html>",
+    "body": {
+        "sms": "<p>短信通知</p><h1>收到一条新短信</h1><table class=\"meta\"><tr><td class=\"label\">来自</td><td>{sender}</td></tr><tr><td class=\"label\">本机号码</td><td>{receiver}</td></tr><tr><td class=\"label\">时间</td><td>{timestamp}</td></tr></table><div class=\"message\">{message}</div>",
+        "call": "<p>来电提醒</p><h1>有新的来电</h1><table class=\"meta\"><tr><td class=\"label\">主叫号码</td><td>{caller}</td></tr><tr><td class=\"label\">本机号码</td><td>{receiver}</td></tr><tr><td class=\"label\">时间</td><td>{timestamp}</td></tr></table>",
+        "heartbeat": "<p>设备状态</p><h1>{title}</h1><table class=\"meta\"><tr><td class=\"label\">时间</td><td>{timestamp}</td></tr><tr><td class=\"label\">累计转发</td><td>{sms_total} 条</td></tr><tr><td class=\"label\">空闲内存</td><td>{free_heap} KB</td></tr></table><div class=\"message\">{message}</div>",
+        "keepalive": "<p>保号任务</p><h1>{title}</h1><table class=\"meta\"><tr><td class=\"label\">方式</td><td>{action}</td></tr><tr><td class=\"label\">时间</td><td>{timestamp}</td></tr></table><div class=\"message\">{result}</div>",
+        "system": "<p>系统通知</p><h1>{title}</h1><table class=\"meta\"><tr><td class=\"label\">时间</td><td>{timestamp}</td></tr></table><div class=\"message\">{message}</div>",
+    },
+    "subject": {
+        "sms": "短信 · {sender} · {message}", "call": "来电 · {caller}",
+        "heartbeat": "{title} · {timestamp}", "keepalive": "{title} · {timestamp}", "system": "{title}",
+    },
+}
+
 stub = f"""<script>
 /* PREVIEW ONLY — mock fetch，不包含真实号码、密钥、邮箱或设备标识。 */
 (function(){{
@@ -220,14 +235,46 @@ stub = f"""<script>
   var messages = {json.dumps(mock_messages, ensure_ascii=False)};
   var sent = {json.dumps(mock_sent, ensure_ascii=False)};
   var logs = {json.dumps(mock_log, ensure_ascii=False)};
+  var emailTemplates = {json.dumps(mock_email_templates, ensure_ascii=False)};
+  var emailCustom = {{}};
   function resp(obj, text) {{ return Promise.resolve({{
     ok: true,
     status: 200,
     json: function() {{ return Promise.resolve(obj); }},
     text: function() {{ return Promise.resolve(text != null ? text : JSON.stringify(obj)); }}
   }}); }}
-  window.fetch = function(url) {{
+  function emailSample(kind) {{
+    return kind === 'sms' ? {{sender:'+2289063869',receiver:'+19447568288020',timestamp:'2026-07-13 19:29:47 UTC+8',message:'<#> 您的 WhatsApp 验证码: 892-279\\n请不要与其他人共享这个密码\\nxxxxxxxxx',title:'短信通知'}} :
+      kind === 'call' ? {{caller:'+447700900456',receiver:'+447973000186',timestamp:'2026-07-13 19:29:47 UTC+8',title:'来电提醒',message:''}} :
+      kind === 'heartbeat' ? {{title:'设备每日心跳',message:'设备运行正常。',timestamp:'2026-07-13 09:00:00 UTC+8',sms_total:'128',free_heap:'196'}} :
+      kind === 'keepalive' ? {{title:'保号动作已执行',message:'保号动作已成功执行。',timestamp:'2026-07-13 10:20:00 UTC+8',action:'USSD 查询',result:'余额查询成功，已更新保号基准日'}} :
+      {{title:'定时任务已执行',message:'任务: 月度检查\\n动作: 推送提醒\\n结果: 成功',timestamp:'2026-07-13 10:30:00 UTC+8'}};
+  }}
+  function emailEsc(v) {{ return String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;').replace(/\\r?\\n/g,'<br>'); }}
+  function emailRender(kind, part, edited) {{
+    var sample = emailSample(kind), base = emailTemplates.base, body = emailTemplates.body[kind], subject = emailTemplates.subject[kind];
+    if (part === 'base') base = edited; else if (part === 'body') body = edited; else subject = edited;
+    function fill(src, html) {{ return String(src || '').replace(/\\{{([a-z_]+)\\}}/g, function(_, key) {{ var v = sample[key] == null ? '' : sample[key]; return html ? emailEsc(v) : String(v).replace(/[\\r\\n]/g,' '); }}); }}
+    var content = fill(body, true), html = String(base || '').replace(/\\{{content\\}}/g, content);
+    return {{success:true,subject:fill(subject,false),html:html,plain:String(sample.title || '')+'\\n'+String(sample.message || sample.result || '')}};
+  }}
+  window.fetch = function(url, opt) {{
     url = String(url || '');
+    opt = opt || {{}};
+    if (url.indexOf('/emailtemplate') >= 0) {{
+      var eu = new URL(url, location.href), part = eu.searchParams.get('part') || 'base', kind = eu.searchParams.get('kind') || 'sms';
+      if (String(opt.method || 'GET').toUpperCase() === 'DELETE') {{ emailCustom[part + '.' + kind] = false; return resp({{success:true,message:'已恢复默认模板'}}); }}
+      if (String(opt.method || 'GET').toUpperCase() === 'POST') {{
+        if (part === 'base') emailTemplates.base = String(opt.body || ''); else emailTemplates[part][kind] = String(opt.body || '');
+        emailCustom[part + '.' + kind] = true; return resp({{success:true,message:'模板已保存'}});
+      }}
+      var value = part === 'base' ? emailTemplates.base : emailTemplates[part][kind];
+      var placeholders = part === 'base' ? ['{{content}}'] : Object.keys(emailSample(kind)).map(function(k){{return '{{'+k+'}}';}});
+      return resp({{success:true,part:part,kind:kind,value:value,customized:!!emailCustom[part+'.'+kind],maxBytes:part==='base'?8192:(part==='body'?4096:256),placeholders:placeholders}});
+    }}
+    if (url.indexOf('/emailpreview') >= 0) {{
+      var pu = new URL(url, location.href); return resp(emailRender(pu.searchParams.get('kind') || 'sms', pu.searchParams.get('part') || 'base', String(opt.body || '')));
+    }}
     if (url.indexOf('/config.json') >= 0) return resp(config);
     if (url.indexOf('/ui?') >= 0) {{
       var m = url.match(/[?&]panel=([^&]+)/);

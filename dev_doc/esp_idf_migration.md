@@ -27,4 +27,30 @@ python tools\build_web_assets.py --check
 powershell -ExecutionPolicy Bypass -File tools\idf.ps1 build
 ```
 
+### Windows 已验证的显式环境
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\idf.ps1 build `
+  -IdfPath 'C:\tools\esp\.espressif\v6.0.2\esp-idf' `
+  -IdfToolsPath 'C:\Espressif\tools' `
+  -IdfPythonEnvPath 'C:\Espressif\tools\python\v6.0.2\venv' `
+  -BuildDir 'build\idf-local' -Jobs 4
+```
+
+成功时 CMake 应显示 Ninja、`Building ESP-IDF components for target esp32c3`，并在所选构建目录生成：
+
+- `sms_forwarding_idf.bin`
+- `bootloader/bootloader.bin`
+- `partition_table/partition-table.bin`
+
+### 构建故障判别顺序
+
+1. 先确认脚本输出的 `IDF_PATH`、`IDF_TOOLS_PATH`、`IDF_PYTHON_ENV_PATH` 与预期一致。
+2. 如果出现 `generator Ninja does not match Visual Studio`，或 C/C++ 编译器被识别为 MSVC，说明构建目录缓存被其他生成器污染。不要继续修改环境变量，直接指定一个新的 `-BuildDir`。
+3. 如果在 CMake 启动前出现 Python `asyncio.windows_utils.pipe` 的 `WinError 5`，这是自动化沙箱拒绝创建子进程管道，不是 ESP-IDF 安装错误。获准后在沙箱外重跑同一条脚本命令。
+4. 如果自动化命令超时，先检查本轮启动的 Ninja 是否仍在运行。不要立即启动第二个构建；只终止能够通过 PID 和启动时间确认属于本轮的孤立进程，再用更长超时和同一 `-BuildDir` 增量续跑。
+5. 不得使用 `Get-Process ninja | Stop-Process` 这类全局终止命令，以免破坏其他终端或项目的构建。
+
+构建脚本是唯一推荐入口：它负责 EIM/`export.ps1` 激活、Ninja 生成器、`build/sdkconfig` 和增量编译。不要用裸 CMake 绕过脚本。
+
 设备侧仍需按场景人工验证：短信收发、长短信合并、推送/邮件实际投递、OTA 上传、WiFi 配网 SoftAP、BOOT 长按配网、保号 MHTTP/USSD、弱信号/无 SIM/漫游场景。

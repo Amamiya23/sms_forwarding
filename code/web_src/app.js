@@ -3,6 +3,7 @@
     var webConfig = null, webConfigReq = null;
     var loadedPanels = {};
     var panelSeq = 0, currentPanel = '', panelFetchCtrl = null;
+    var emailTemplateTimer = null, emailTemplateAbort = null;
 
     function ensureConfig(force) {
       if (force) { webConfig = null; webConfigReq = null; }
@@ -171,6 +172,8 @@
       if (stTimer) { clearTimeout(stTimer); stTimer = null; }
       if (esimTimer) { clearTimeout(esimTimer); esimTimer = null; }
       if (latestOtpTimer) { clearTimeout(latestOtpTimer); latestOtpTimer = null; }
+      if (emailTemplateTimer) { clearTimeout(emailTemplateTimer); emailTemplateTimer = null; }
+      if (emailTemplateAbort) { try { emailTemplateAbort.abort(); } catch (e) {} emailTemplateAbort = null; }
     }
     function cleanupPanelRuntime() {
       stopLogPoll();
@@ -195,7 +198,7 @@
       if (name === 'keepalive' || name === 'diagnose') kaLoadStatus();
       if (name === 'keepalive') stLoadStatus();
       if (name === 'sim') { wifiPrefill(); esimLoadStatus(); }
-      if (name === 'push') { for (var i = 0; i < 5; i++) { toggleChannel(i); updateTypeHint(i); } setupChannels(); parseFwdRules(); renderRules(); }
+      if (name === 'push') { for (var i = 0; i < 5; i++) { toggleChannel(i); updateTypeHint(i); } setupChannels(); parseFwdRules(); renderRules(); initEmailTemplates(); }
       if (name === 'atterm') bindAtTerminal();
     }
     function activateNav(name) {
@@ -265,6 +268,195 @@
       });
     });
     window.addEventListener('hashchange', function() { switchPanel(panelFromHash()); });
+
+    // ---- Email template editor ----
+    var emailTplState = { tab: 'base', previewKind: 'sms', body: null, subject: null, base: null, focus: 'body', loading: false };
+    function emailTemplateUrl(path, part, kind) {
+      var url = path + '?part=' + encodeURIComponent(part);
+      if (kind) url += '&kind=' + encodeURIComponent(kind);
+      return url;
+    }
+    function emailApiJson(r) {
+      return r.json().catch(function(){ return {}; }).then(function(d) {
+        if (!r.ok || d.success === false) throw new Error(d.message || ('HTTP ' + r.status));
+        return d;
+      });
+    }
+    function emailByteLength(value) {
+      if (window.TextEncoder) return new TextEncoder().encode(value || '').length;
+      return unescape(encodeURIComponent(value || '')).length;
+    }
+    function setEmailTemplateStatus(text, kind) {
+      var el = document.getElementById('emailTemplateStatus');
+      if (!el) return;
+      el.textContent = text || '';
+      el.className = 'template-status' + (kind ? ' ' + kind : '');
+    }
+    function updateEmailTemplateBytes() {
+      var editor = document.getElementById('emailHtmlEditor'), out = document.getElementById('emailTemplateBytes');
+      if (!editor || !out) return;
+      var max = emailTplState.tab === 'base' ? 8192 : 4096;
+      var bytes = emailByteLength(editor.value);
+      out.textContent = bytes + ' / ' + max + ' B';
+      out.classList.toggle('over', bytes > max);
+    }
+    function renderEmailPlaceholders(items) {
+      var host = document.getElementById('emailTemplatePlaceholders');
+      if (!host) return;
+      host.innerHTML = (items || []).map(function(token) {
+        return '<button type="button" class="template-token" title="插入 ' + htmlEsc(token) + '" onclick="insertEmailPlaceholder(\'' + htmlEsc(token) + '\')">' + htmlEsc(token) + '</button>';
+      }).join('');
+    }
+    function updateEmailTemplateMode(customized) {
+      var mode = document.getElementById('emailTemplateMode');
+      if (!mode) return;
+      mode.textContent = customized ? '已自定义' : '使用默认';
+      mode.className = 'template-mode ' + (customized ? 'custom' : 'default');
+    }
+    function loadEmailTemplateTab() {
+      var editor = document.getElementById('emailHtmlEditor');
+      if (!editor || !panelActive('push')) return;
+      emailTplState.loading = true;
+      setEmailTemplateStatus('载入中', 'loading');
+      var tab = emailTplState.tab;
+      if (tab === 'base') {
+        fetch(emailTemplateUrl('/emailtemplate', 'base', emailTplState.previewKind), {cache:'no-store'}).then(emailApiJson).then(function(d) {
+          if (!panelActive('push') || emailTplState.tab !== 'base') return;
+          emailTplState.base = d;
+          editor.value = d.value || '';
+          renderEmailPlaceholders(d.placeholders);
+          updateEmailTemplateMode(!!d.customized);
+          setEmailTemplateStatus('基础模板已载入', 'ok');
+          updateEmailTemplateBytes();
+          scheduleEmailPreview();
+        }).catch(function(e){ setEmailTemplateStatus(e.message, 'err'); }).then(function(){ emailTplState.loading = false; });
+        return;
+      }
+      Promise.all([
+        fetch(emailTemplateUrl('/emailtemplate', 'body', tab), {cache:'no-store'}).then(emailApiJson),
+        fetch(emailTemplateUrl('/emailtemplate', 'subject', tab), {cache:'no-store'}).then(emailApiJson)
+      ]).then(function(values) {
+        if (!panelActive('push') || emailTplState.tab !== tab) return;
+        emailTplState.body = values[0]; emailTplState.subject = values[1];
+        editor.value = values[0].value || '';
+        var subject = document.getElementById('emailSubjectEditor');
+        if (subject) subject.value = values[1].value || '';
+        renderEmailPlaceholders(values[0].placeholders);
+        updateEmailTemplateMode(!!values[0].customized || !!values[1].customized);
+        setEmailTemplateStatus('模板已载入', 'ok');
+        updateEmailTemplateBytes();
+        scheduleEmailPreview();
+      }).catch(function(e){ setEmailTemplateStatus(e.message, 'err'); }).then(function(){ emailTplState.loading = false; });
+    }
+    function setEmailTemplateTab(tab) {
+      emailTplState.tab = tab;
+      document.querySelectorAll('.template-tab').forEach(function(btn){ btn.classList.toggle('active', btn.dataset.templateTab === tab); });
+      var subjectGroup = document.getElementById('emailSubjectGroup');
+      var baseKind = document.getElementById('emailBasePreviewKind');
+      var label = document.getElementById('emailHtmlLabel');
+      if (subjectGroup) subjectGroup.hidden = tab === 'base';
+      if (baseKind) baseKind.hidden = tab !== 'base';
+      if (label) label.textContent = tab === 'base' ? '基础 HTML / CSS' : '正文 HTML';
+      emailTplState.focus = 'body';
+      loadEmailTemplateTab();
+    }
+    function changeEmailPreviewKind(kind) {
+      emailTplState.previewKind = kind || 'sms';
+      scheduleEmailPreview();
+    }
+    function insertEmailPlaceholder(token) {
+      var target = emailTplState.focus === 'subject' && emailTplState.tab !== 'base'
+        ? document.getElementById('emailSubjectEditor') : document.getElementById('emailHtmlEditor');
+      if (!target) return;
+      var start = target.selectionStart == null ? target.value.length : target.selectionStart;
+      var end = target.selectionEnd == null ? start : target.selectionEnd;
+      target.value = target.value.slice(0, start) + token + target.value.slice(end);
+      target.focus(); target.selectionStart = target.selectionEnd = start + token.length;
+      updateEmailTemplateBytes(); scheduleEmailPreview(); setEmailTemplateStatus('有未保存修改', 'dirty');
+    }
+    function requestEmailPreview(part, kind, value, signal) {
+      var opt = {method:'POST', cache:'no-store', body:value, headers:{'Content-Type':'text/plain; charset=UTF-8'}};
+      if (signal) opt.signal = signal;
+      return csrfFetch(emailTemplateUrl('/emailpreview', part, kind), opt).then(emailApiJson);
+    }
+    function emailPreviewNow() {
+      var editor = document.getElementById('emailHtmlEditor');
+      if (!editor) return Promise.reject(new Error('编辑器未就绪'));
+      if (emailTemplateAbort) { try { emailTemplateAbort.abort(); } catch (e) {} }
+      var ctrl = window.AbortController ? new AbortController() : null;
+      emailTemplateAbort = ctrl;
+      var signal = ctrl ? ctrl.signal : null;
+      var tab = emailTplState.tab, kind = tab === 'base' ? emailTplState.previewKind : tab;
+      var htmlReq = requestEmailPreview(tab === 'base' ? 'base' : 'body', kind, editor.value, signal);
+      var subjectInput = document.getElementById('emailSubjectEditor');
+      var subjectReq = tab === 'base' ? Promise.resolve(null) : requestEmailPreview('subject', kind, subjectInput ? subjectInput.value : '', signal);
+      return Promise.all([htmlReq, subjectReq]).then(function(values) {
+        if (!panelActive('push') || emailTplState.tab !== tab) return values;
+        var html = values[0], subject = values[1] || values[0];
+        var frame = document.getElementById('emailTemplatePreview');
+        var subjectOut = document.getElementById('emailPreviewSubject');
+        var plain = document.getElementById('emailPreviewPlain');
+        if (frame) frame.srcdoc = html.html || '';
+        if (subjectOut) subjectOut.textContent = subject.subject || '';
+        if (plain) plain.textContent = html.plain || '';
+        setEmailTemplateStatus('预览已更新', 'ok');
+        return values;
+      }).catch(function(e) {
+        if (e && e.name === 'AbortError') return;
+        setEmailTemplateStatus(e.message || '预览失败', 'err');
+        throw e;
+      });
+    }
+    function scheduleEmailPreview() {
+      updateEmailTemplateBytes();
+      if (emailTemplateTimer) clearTimeout(emailTemplateTimer);
+      emailTemplateTimer = setTimeout(function(){ emailTemplateTimer = null; emailPreviewNow().catch(function(){}); }, 300);
+    }
+    function saveEmailPart(part, kind, value) {
+      return csrfFetch(emailTemplateUrl('/emailtemplate', part, kind), {
+        method:'POST', cache:'no-store', body:value, headers:{'Content-Type':'text/plain; charset=UTF-8'}
+      }).then(emailApiJson);
+    }
+    function saveEmailTemplate() {
+      var editor = document.getElementById('emailHtmlEditor'), subject = document.getElementById('emailSubjectEditor');
+      var btn = document.getElementById('emailTemplateSave');
+      if (!editor || !btn || emailTplState.loading) return;
+      btn.disabled = true; setEmailTemplateStatus('正在校验', 'loading');
+      emailPreviewNow().then(function() {
+        setEmailTemplateStatus('正在保存', 'loading');
+        if (emailTplState.tab === 'base') return saveEmailPart('base', emailTplState.previewKind, editor.value);
+        return Promise.all([
+          saveEmailPart('subject', emailTplState.tab, subject ? subject.value : ''),
+          saveEmailPart('body', emailTplState.tab, editor.value)
+        ]);
+      }).then(function(){ showToast('模板已保存', 'ok'); loadEmailTemplateTab(); })
+        .catch(function(e){ if (!e || e.name !== 'AbortError') showToast(e.message || '模板保存失败', 'err'); })
+        .then(function(){ btn.disabled = false; });
+    }
+    function deleteEmailPart(part, kind) {
+      return csrfFetch(emailTemplateUrl('/emailtemplate', part, kind), {method:'DELETE', cache:'no-store'}).then(emailApiJson);
+    }
+    function resetEmailTemplate() {
+      if (!confirm('恢复当前模板的内置默认值？')) return;
+      var tab = emailTplState.tab;
+      var actions = tab === 'base' ? [deleteEmailPart('base', emailTplState.previewKind)] :
+        [deleteEmailPart('subject', tab), deleteEmailPart('body', tab)];
+      setEmailTemplateStatus('正在恢复默认', 'loading');
+      Promise.all(actions).then(function(){ showToast('已恢复默认模板', 'ok'); loadEmailTemplateTab(); })
+        .catch(function(e){ setEmailTemplateStatus(e.message || '恢复失败', 'err'); showToast(e.message || '恢复失败', 'err'); });
+    }
+    function initEmailTemplates() {
+      var editor = document.getElementById('emailHtmlEditor'), subject = document.getElementById('emailSubjectEditor');
+      if (!editor) return;
+      editor.addEventListener('focus', function(){ emailTplState.focus = 'body'; });
+      editor.addEventListener('input', function(){ setEmailTemplateStatus('有未保存修改', 'dirty'); scheduleEmailPreview(); });
+      if (subject) {
+        subject.addEventListener('focus', function(){ emailTplState.focus = 'subject'; });
+        subject.addEventListener('input', function(){ setEmailTemplateStatus('有未保存修改', 'dirty'); scheduleEmailPreview(); });
+      }
+      emailTplState.tab = 'base'; emailTplState.previewKind = 'sms';
+      setEmailTemplateTab('base');
+    }
 
     // ---- Push Channel JS ----
     function toggleChannel(idx) {

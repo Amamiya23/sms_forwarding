@@ -96,6 +96,60 @@
       </form>
       </div>
       </div>
+
+      <section class="email-template-workspace" id="emailTemplateWorkspace">
+        <div class="email-template-head">
+          <div>
+            <h2>邮件模板</h2>
+            <span id="emailTemplateMode" class="template-mode">载入中</span>
+          </div>
+          <div class="template-actions">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="resetEmailTemplate()">恢复默认</button>
+            <button type="button" class="btn btn-primary btn-sm" id="emailTemplateSave" onclick="saveEmailTemplate()">保存模板</button>
+          </div>
+        </div>
+        <div class="template-tabs" role="tablist" aria-label="邮件模板类型">
+          <button type="button" class="template-tab active" data-template-tab="base" onclick="setEmailTemplateTab('base')">基础</button>
+          <button type="button" class="template-tab" data-template-tab="sms" onclick="setEmailTemplateTab('sms')">短信</button>
+          <button type="button" class="template-tab" data-template-tab="call" onclick="setEmailTemplateTab('call')">来电</button>
+          <button type="button" class="template-tab" data-template-tab="heartbeat" onclick="setEmailTemplateTab('heartbeat')">心跳</button>
+          <button type="button" class="template-tab" data-template-tab="keepalive" onclick="setEmailTemplateTab('keepalive')">保号</button>
+          <button type="button" class="template-tab" data-template-tab="system" onclick="setEmailTemplateTab('system')">系统</button>
+        </div>
+        <div class="template-layout">
+          <div class="template-editor-pane">
+            <div class="template-preview-kind" id="emailBasePreviewKind">
+              <label class="form-label" for="emailPreviewKind">预览类型</label>
+              <select class="form-select" id="emailPreviewKind" onchange="changeEmailPreviewKind(this.value)">
+                <option value="sms">短信</option><option value="call">来电</option><option value="heartbeat">心跳</option>
+                <option value="keepalive">保号</option><option value="system">系统</option>
+              </select>
+            </div>
+            <div class="form-group template-subject-group" id="emailSubjectGroup" hidden>
+              <label class="form-label" for="emailSubjectEditor">Subject</label>
+              <input class="form-input template-subject" id="emailSubjectEditor" type="text" maxlength="256" spellcheck="false">
+            </div>
+            <div class="template-editor-label">
+              <label class="form-label" for="emailHtmlEditor" id="emailHtmlLabel">基础 HTML / CSS</label>
+              <span id="emailTemplateBytes">0 / 8192 B</span>
+            </div>
+            <div class="template-placeholders" id="emailTemplatePlaceholders"></div>
+            <textarea class="template-code" id="emailHtmlEditor" spellcheck="false" wrap="off"></textarea>
+            <div class="template-status" id="emailTemplateStatus" role="status" aria-live="polite"></div>
+          </div>
+          <div class="template-preview-pane">
+            <div class="template-preview-bar">
+              <span>邮件预览</span>
+              <strong id="emailPreviewSubject"></strong>
+            </div>
+            <iframe id="emailTemplatePreview" class="template-preview-frame" sandbox="" title="邮件模板预览"></iframe>
+            <details class="template-plain-preview">
+              <summary>纯文本备用正文</summary>
+              <pre id="emailPreviewPlain"></pre>
+            </details>
+          </div>
+        </div>
+      </section>
     </div>
 
 

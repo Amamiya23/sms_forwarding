@@ -725,12 +725,11 @@ static void notify_incoming_call(const std::string& number)
         }
     }
     std::string num = number.empty() ? std::string("未知号码") : number;
-    std::string body = "来电：" + num;
     std::string display_ts = format_epoch_local(static_cast<uint32_t>(time(nullptr)),
                                                 idf_config_get_tz_offset());
     idf_logf("来电通知：%s，入队转发中", num.c_str());
-    // 复用短信转发通道：发件人=来电号码，正文=来电提示，走与短信相同的推送+邮件
-    if (!idf_push_enqueue_forward(num.c_str(), body.c_str(), display_ts.c_str(), 0)) {
+    // 复用短信转发规则与推送通道，但显式标记为来电，邮件使用独立模板。
+    if (!idf_push_enqueue_call(num.c_str(), display_ts.c_str())) {
         idf_log_line("转发入口队列已满，来电通知未能入队");
     }
 }

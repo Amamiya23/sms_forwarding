@@ -6,6 +6,7 @@ idf_component_register(
     esp_timer
     esp-tls
     idf_config
+    idf_email
     idf_inbox
     idf_logbuf
     idf_modem

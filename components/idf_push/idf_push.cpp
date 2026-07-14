@@ -27,6 +27,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "idf_config.h"
+#include "idf_email.h"
 #include "idf_inbox.h"
 #include "idf_log.h"
 #include "idf_modem.h"
@@ -92,6 +93,7 @@ struct PushJob {
 struct ForwardJob {
     bool used = false;
     bool pushQueued = false;
+    IdfEmailKind emailKind = IdfEmailKind::Sms;
     uint8_t attempts = 0;
     int64_t nextUs = 0;
     std::string sender;
@@ -104,8 +106,7 @@ struct EmailJob {
     bool used = false;
     uint8_t attempts = 0;
     int64_t nextUs = 0;
-    std::string subject;
-    std::string body;
+    IdfEmailData data;
     uint32_t inboxId = 0;  // 同 PushJob：投递最终失败时回改收件箱标记
     uint32_t completionId = 0;
 };
@@ -281,15 +282,6 @@ static std::string format_local_time(int tz_offset_min)
              tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
              tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
     return std::string(buf);
-}
-
-// 在 UTF-8 字符边界截断，避免推送/邮件主题里出现半个汉字
-static std::string utf8_truncate(const std::string& value, size_t max_bytes)
-{
-    if (value.size() <= max_bytes) return value;
-    size_t end = max_bytes;
-    while (end > 0 && (static_cast<unsigned char>(value[end]) & 0xC0) == 0x80) --end;
-    return value.substr(0, end) + "...";
 }
 
 static std::string trim(std::string value)
@@ -1122,7 +1114,7 @@ static std::string base64_wrap76(const std::string& data)
     return out;
 }
 
-static bool send_smtp_email(const IdfEmailSettingsView& cfg, const std::string& subject, const std::string& body)
+static bool send_smtp_email(const IdfEmailSettingsView& cfg, const IdfEmailData& data)
 {
     if (!cfg.emailConfigured) {
         idf_log_line("邮件配置不完整，跳过发送");
@@ -1130,6 +1122,13 @@ static bool send_smtp_email(const IdfEmailSettingsView& cfg, const std::string& 
     }
     if (!idf_wifi_get_status().staConnected) {
         idf_log_line("WiFi未连接，邮件稍后重试");
+        return false;
+    }
+
+    IdfRenderedEmail rendered;
+    std::string render_error;
+    if (!idf_email_render(data, rendered, render_error)) {
+        idf_logf("邮件渲染失败: %s", render_error.c_str());
         return false;
     }
 
@@ -1169,18 +1168,29 @@ static bool send_smtp_email(const IdfEmailSettingsView& cfg, const std::string& 
 
     std::string user64 = base64_encode_string(cfg.smtpUser);
     std::string pass64 = base64_encode_string(cfg.smtpPass);
-    std::string subject_words = encode_subject_words(header_safe(subject));
-    std::string safe_subject = subject_words.empty() ? header_safe(subject) : subject_words;
+    std::string subject_words = encode_subject_words(header_safe(rendered.subject));
+    std::string safe_subject = subject_words.empty() ? header_safe(rendered.subject) : subject_words;
+    char boundary_buf[64];
+    snprintf(boundary_buf, sizeof(boundary_buf), "sms-forwarder-%" PRIx64,
+             static_cast<uint64_t>(esp_timer_get_time()));
+    std::string boundary = boundary_buf;
     std::string message;
-    message.reserve(body.size() * 2 + 512);
+    message.reserve((rendered.plain.size() + rendered.html.size()) * 2 + 1024);
     message += "From: sms notify <" + from + ">\r\n";
     message += "To: <" + to + ">\r\n";
     message += "Subject: " + safe_subject + "\r\n";
     message += "Date: " + smtp_date_utc() + "\r\n";
     message += "MIME-Version: 1.0\r\n";
+    message += "Content-Type: multipart/alternative; boundary=\"" + boundary + "\"\r\n\r\n";
+    message += "--" + boundary + "\r\n";
     message += "Content-Type: text/plain; charset=UTF-8\r\n";
     message += "Content-Transfer-Encoding: base64\r\n\r\n";
-    message += base64_wrap76(body);
+    message += base64_wrap76(rendered.plain);
+    message += "--" + boundary + "\r\n";
+    message += "Content-Type: text/html; charset=UTF-8\r\n";
+    message += "Content-Transfer-Encoding: base64\r\n\r\n";
+    message += base64_wrap76(rendered.html);
+    message += "--" + boundary + "--\r\n";
     message += ".\r\n";
 
     ok = smtp_expect(conn, 220) &&
@@ -1405,7 +1415,7 @@ static int push_queue_free_locked()
     return n;
 }
 
-static bool enqueue_email_job_locked(const std::string& subject, const std::string& body,
+static bool enqueue_email_job_locked(const IdfEmailData& data,
                                      uint8_t attempts = 0, uint32_t delay_sec = 0,
                                      uint32_t inbox_id = 0, uint32_t completion_id = 0)
 {
@@ -1425,8 +1435,7 @@ static bool enqueue_email_job_locked(const std::string& subject, const std::stri
     job.used = true;
     job.attempts = attempts;
     job.nextUs = esp_timer_get_time() + static_cast<int64_t>(delay_sec) * 1000000LL;
-    job.subject = subject;
-    job.body = body;
+    job.data = data;
     job.inboxId = inbox_id;
     job.completionId = completion_id;
     return true;
@@ -1458,9 +1467,11 @@ static bool enqueue_forward_job_locked(const ForwardJob& src, uint32_t delay_sec
     return false;
 }
 
-static bool enqueue_forward_locked(const char* sender, const char* text, const char* timestamp, uint32_t inbox_id)
+static bool enqueue_forward_locked(const char* sender, const char* text, const char* timestamp,
+                                   uint32_t inbox_id, IdfEmailKind email_kind)
 {
     ForwardJob job;
+    job.emailKind = email_kind;
     job.sender = sender ? sender : "";
     job.text = text ? text : "";
     job.timestamp = timestamp ? timestamp : "";
@@ -1592,24 +1603,19 @@ static bool process_forward_one()
             if (dispatched > 0) job.pushQueued = true;
         }
         if (!enqueue_failed && will_queue_email) {
-            // 主题只放正文前若干字符(全文在正文里)，避免超长 Subject 被严格 MTA 拒收
-            std::string subject = "短信";
-            subject += job.sender;
-            subject += ",";
-            subject += utf8_truncate(job.text, 48);
-            std::string body = "来自：";
-            body += job.sender;
-            if (!receiver.empty()) {
-                body += "，本机号码：";
-                body += receiver;
+            IdfEmailData data;
+            data.kind = job.emailKind;
+            data.receiver = receiver;
+            data.timestamp = job.timestamp;
+            data.message = job.text;
+            if (job.emailKind == IdfEmailKind::Call) {
+                data.title = "来电提醒";
+                data.caller = job.sender;
+            } else {
+                data.title = "短信通知";
+                data.sender = job.sender;
             }
-            if (!job.timestamp.empty()) {
-                body += "，时间：";
-                body += job.timestamp;
-            }
-            body += "，内容：";
-            body += job.text;
-            email_queued = enqueue_email_job_locked(subject, body, 0, 0, job.inboxId, completion_id);
+            email_queued = enqueue_email_job_locked(data, 0, 0, job.inboxId, completion_id);
             if (email_queued) had_queued_target = true;
             else {
                 enqueue_failed = true;
@@ -1777,7 +1783,7 @@ static bool process_email_one()
         return false;
     }
 
-    bool ok = send_smtp_email(cfg, job.subject, job.body);
+    bool ok = send_smtp_email(cfg, job.data);
     if (ok) {
         note_forward_target_success(job.completionId);
         s_busy.store(false, std::memory_order_relaxed);
@@ -1793,10 +1799,11 @@ static bool process_email_one()
         s_busy.store(false, std::memory_order_relaxed);
         return true;
     }
-    uint32_t delay = backoff_seconds(job.attempts, static_cast<uint32_t>(job.subject.size() + job.body.size()));
+    uint32_t delay = backoff_seconds(job.attempts,
+        static_cast<uint32_t>(job.data.title.size() + job.data.message.size() + job.data.sender.size()));
     bool requeued = false;
     if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE) {
-        requeued = enqueue_email_job_locked(job.subject, job.body, job.attempts, delay,
+        requeued = enqueue_email_job_locked(job.data, job.attempts, delay,
                                             job.inboxId, job.completionId);
         xSemaphoreGive(s_mutex);
     }
@@ -1895,10 +1902,24 @@ bool idf_push_enqueue_forward(const char* sender, const char* text, const char* 
     if (!ensure_init()) return false;
     // 临界区都很短(纯内存操作)，无限等锁保证收到的短信绝不因锁竞争被丢
     if (!s_mutex || xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) return false;
-    bool ok = enqueue_forward_locked(sender, text, timestamp, inbox_id);
+    bool ok = enqueue_forward_locked(sender, text, timestamp, inbox_id, IdfEmailKind::Sms);
     xSemaphoreGive(s_mutex);
     if (ok) wake_worker();
     else idf_log_line("转发队列已满，短信暂未转发");
+    return ok;
+}
+
+bool idf_push_enqueue_call(const char* caller, const char* timestamp)
+{
+    if (!ensure_init()) return false;
+    std::string number = caller ? caller : "";
+    std::string text = "来电：" + (number.empty() ? std::string("未知号码") : number);
+    if (!s_mutex || xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) return false;
+    bool ok = enqueue_forward_locked(number.empty() ? "未知号码" : number.c_str(), text.c_str(),
+                                     timestamp, 0, IdfEmailKind::Call);
+    xSemaphoreGive(s_mutex);
+    if (ok) wake_worker();
+    else idf_log_line("转发队列已满，来电通知未转发");
     return ok;
 }
 
@@ -1927,13 +1948,23 @@ int idf_push_enqueue_notify(const char* title, const char* body, const char* tim
 
 bool idf_push_enqueue_email(const char* subject, const char* body)
 {
+    IdfEmailData data;
+    data.kind = IdfEmailKind::System;
+    data.title = subject ? subject : "系统通知";
+    data.message = body ? body : "";
+    data.timestamp = format_local_time(idf_config_get_tz_offset());
+    return idf_push_enqueue_email_data(data);
+}
+
+bool idf_push_enqueue_email_data(const IdfEmailData& data)
+{
     if (!ensure_init()) return false;
     if (!idf_config_email_configured()) {
         idf_log_line("邮件配置不完整，邮件未入队");
         return false;
     }
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
-    bool ok = enqueue_email_job_locked(subject ? subject : "", body ? body : "");
+    bool ok = enqueue_email_job_locked(data);
     int depth = email_queue_depth_locked();
     xSemaphoreGive(s_mutex);
     if (ok) {

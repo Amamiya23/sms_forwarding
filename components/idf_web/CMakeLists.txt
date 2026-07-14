@@ -10,6 +10,7 @@ idf_component_register(
     heap
     esp_http_server
     idf_config
+    idf_email
     idf_esim
     idf_inbox
     idf_logbuf
