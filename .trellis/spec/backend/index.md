@@ -18,7 +18,9 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
 | [Quality Guidelines](./quality-guidelines.md) | ESP-IDF 6 build and crypto compatibility contracts | Active |
-| [Email Template Contracts](./email-template-contracts.md) | Typed SMTP rendering, storage, API, and fallback contracts | Active |
+| [Email Template Contracts](./email-template-contracts.md) | Typed SMTP rendering, storage, API, default subject, and fallback contracts | Active |
+| [SMTP Test Contracts](./smtp-test-contracts.md) | Async `/testsmtp` enqueue/status and form-value testing | Active |
+| [Local MSISDN Contracts](./msisdn-contracts.md) | CNUM normalize, manual phone priority, email receiver | Active |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 
 ---

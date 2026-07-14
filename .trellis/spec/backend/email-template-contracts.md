@@ -29,6 +29,8 @@ POST /emailpreview?part=base|body|subject&kind=sms|call|heartbeat|keepalive|syst
 - SMTP DATA is UTF-8 `multipart/alternative` with base64 `text/plain` followed by base64 `text/html`.
 - Queues retain `IdfEmailData`, not rendered HTML, so retries use the latest valid template.
 - Template overrides are included in config export/import and cleared by factory reset.
+- Compiled default SMS subject is `短信 · {sender}` only. Do **not** put `{message}` in the default subject; the full body stays in HTML/plain templates. Existing NVS subject overrides are never rewritten by firmware upgrades; "reset to default" must load the compiled default.
+- Preview/sample data and `preview/build_preview.py` defaults must match the compiled subject strings.
 
 ### 4. Validation & Error Matrix
 
@@ -44,9 +46,9 @@ POST /emailpreview?part=base|body|subject&kind=sms|call|heartbeat|keepalive|syst
 
 ### 5. Good/Base/Bad Cases
 
-- Good: enqueue an SMS with structured sender, receiver, timestamp, and message fields; render immediately before SMTP send.
+- Good: enqueue an SMS with structured sender, receiver, timestamp, and message fields; render immediately before SMTP send. Default subject becomes a short `短信 · {sender}` line.
 - Base: no NVS overrides exist after firmware upgrade, so all five kinds use compiled defaults without migration.
-- Bad: flatten SMS fields into one HTML string before enqueueing or rescan replacement output for placeholders.
+- Bad: flatten SMS fields into one HTML string before enqueueing, rescan replacement output for placeholders, or restore default SMS subject to `短信 · {sender} · {message}` (puts the entire SMS into Subject).
 
 ### 6. Tests Required
 
