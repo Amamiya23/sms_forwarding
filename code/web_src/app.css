@@ -1,29 +1,31 @@
-/* ===== 方向 A · 场测仪 / Field-Test Instrument(暗色一等公民) =====
-       纯 vanilla，无网页字体。个性来自等宽数据 + 琥珀单强调 + 1px 网格 + 矩形。
-       选择器与旧版完全一致，仅换观感，后端契约(元素 ID / JS / 占位符)不变。 */
+/* ===== 工具控制台(暗色一等公民) =====
+       纯 vanilla，无网页字体。等宽数据 + 青绿强调 + 轻网格。
+       变量名 --amber 为历史兼容；实际为 teal accent。 */
     :root {
       --mono: 'SF Mono','Cascadia Code','JetBrains Mono','Consolas','Liberation Mono',monospace;
-      --bg: #0E1014; --grid: rgba(255,255,255,0.025);
-      --canvas: #15181E; --canvas-soft: #1B1F27; --canvas-soft-2: #1B1F27; --inset: #0A0C0F;
-      --hairline: #242A33; --hairline-strong: #333B47;
-      --ink: #E7EAEF; --body: #AEB6C1; --mute: #8B93A0; --faint: #576070;
-      --amber: #E8B23A; --amber-dim: #9C7A2C; --amber-glow: rgba(232,178,58,0.13);
-      --link: #E8B23A; --error: #DC6E4E;
-      --warning-soft: rgba(232,178,58,0.12);
+      --bg: #10141A; --grid: rgba(255,255,255,0.018);
+      --canvas: #171C24; --canvas-soft: #1E2430; --canvas-soft-2: #1E2430; --inset: #0C1016;
+      --hairline: #2A3140; --hairline-strong: #3A4354;
+      --ink: #E9EDF3; --body: #B3BBC7; --mute: #8E97A6; --faint: #5C6676;
+      --amber: #4DB6A8; --amber-dim: #2E7A71; --amber-glow: rgba(77,182,168,0.13);
+      --link: #4DB6A8; --error: #D4675A;
+      --ok: #5CB585; --ok-soft: rgba(92,181,133,0.12);
+      --warning-soft: rgba(77,182,168,0.10);
       --sidebar-w: 234px;
-      --radius-sm: 2px; --radius-md: 2px; --radius-pill: 2px;
-      --shadow-card: none;
+      --radius-sm: 6px; --radius-md: 8px; --radius-pill: 999px;
+      --shadow-card: 0 1px 0 rgba(255,255,255,0.03);
     }
-    /* 浅色"纸面仪器"主题(独立调色，非反相) */
+    /* 浅色主题(独立调色，非反相) */
     html[data-theme="light"] {
-      --grid: rgba(20,28,40,0.03);
-      --bg: #E7EAEF;
-      --canvas: #FFFFFF; --canvas-soft: #F2F4F7; --canvas-soft-2: #F2F4F7; --inset: #F6F8FA;
-      --hairline: #D8DDE4; --hairline-strong: #C0C7D1;
-      --ink: #191D24; --body: #3F4651; --mute: #5C6573; --faint: #9AA2AE;
-      --amber: #B07208; --amber-dim: #7E520A; --amber-glow: rgba(176,114,8,0.10);
-      --link: #B07208; --error: #B84E32;
-      --warning-soft: rgba(176,114,8,0.09);
+      --grid: rgba(20,28,40,0.02);
+      --bg: #EEF1F5;
+      --canvas: #FFFFFF; --canvas-soft: #F4F6F9; --canvas-soft-2: #F4F6F9; --inset: #F7F9FB;
+      --hairline: #E0E5EC; --hairline-strong: #C8CFD9;
+      --ink: #1A1F27; --body: #424A57; --mute: #5F6876; --faint: #97A0AD;
+      --amber: #2A8F82; --amber-dim: #1F6B62; --amber-glow: rgba(42,143,130,0.10);
+      --link: #2A8F82; --error: #B84E32;
+      --ok: #2F8F63; --ok-soft: rgba(47,143,99,0.10);
+      --warning-soft: rgba(42,143,130,0.08);
     }
     /* 信号量表(概览签名) */
     .sig-card .gauge { display: grid; grid-template-columns: 46px 1fr 96px; gap: 10px; align-items: center; margin-bottom: 9px; }
@@ -87,8 +89,15 @@
     .page-subtitle { font-size: 12px; color: var(--mute); margin-bottom: 22px; }
 
     /* Card -> 模块 */
-    .card { background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--radius-md); box-shadow: none; margin-bottom: 14px; }
+    .card { background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--radius-md); box-shadow: var(--shadow-card); margin-bottom: 14px; }
     .card-header { padding: 11px 16px; font-size: 10px; font-weight: 600; color: var(--mute); letter-spacing: 0.12em; text-transform: uppercase; font-family: var(--mono); border-bottom: 1px solid var(--hairline); display: flex; align-items: center; gap: 8px; }
+    .card-chip { margin-left: auto; padding: 2px 7px; border-radius: var(--radius-sm); border: 1px solid var(--hairline); background: var(--inset); color: var(--faint); font: 600 10px/1.4 var(--mono); letter-spacing: 0; text-transform: none; }
+    .smtp-test-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+    #smtpTestResult { margin-top: 10px; }
+    .push-layout.push-layout { column-count: 2; }
+    @media (max-width: 900px) {
+      .push-layout.push-layout { column-count: 1; }
+    }
     .card-body { padding: 14px 16px; }
     .card-header + .card-body { padding-top: 14px; }
 
@@ -139,8 +148,10 @@
     }
     .btn:hover { border-color: var(--amber-dim); color: var(--amber); }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-primary { background: var(--amber); color: #1A1306; border-color: var(--amber); }
-    .btn-primary:hover { background: #f2c155; color: #1A1306; }
+    .btn-primary { background: var(--amber); color: #061412; border-color: var(--amber); }
+    .btn-primary:hover { background: #5fc4b5; color: #061412; }
+    html[data-theme="light"] .btn-primary { color: #f4fffc; }
+    html[data-theme="light"] .btn-primary:hover { background: #237a6f; color: #f4fffc; }
     .btn-secondary { background: var(--canvas-soft); color: var(--ink); box-shadow: none; }
     .btn-secondary:hover { background: var(--canvas-soft); color: var(--amber); border-color: var(--amber-dim); }
     .btn-danger { background: var(--canvas-soft); color: var(--ink); border-color: var(--hairline-strong); }
@@ -164,9 +175,9 @@
     .switch-input { position: absolute; opacity: 0; width: 0; height: 0; }
     .switch-slider { position: relative; display: inline-block; vertical-align: middle; flex: 0 0 auto; width: 40px; height: 22px; border-radius: 999px; background: #8b9198; transition: background 0.18s ease; }
     .switch-slider::before { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.35); transition: transform 0.18s ease; }
-    .switch-input:checked + .switch-slider { background: #2f81f7; }
+    .switch-input:checked + .switch-slider { background: var(--amber); }
     .switch-input:checked + .switch-slider::before { transform: translateX(18px); }
-    .switch-input:focus-visible + .switch-slider { outline: 2px solid #2f81f7; outline-offset: 2px; }
+    .switch-input:focus-visible + .switch-slider { outline: 2px solid var(--amber-dim); outline-offset: 2px; }
     /* 行内开关：用于卡片标题/表单行里替代原生复选框，与 switch-row 视觉一致 */
     .switch-inline { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
     /* .push-channel-body label{display:block} 特异性更高，会顶掉行内开关的 inline-flex，这里显式恢复 */

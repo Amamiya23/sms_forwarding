@@ -221,7 +221,7 @@ mock_email_templates = {
         "system": "<p>系统通知</p><h1>{title}</h1><table class=\"meta\"><tr><td class=\"label\">时间</td><td>{timestamp}</td></tr></table><div class=\"message\">{message}</div>",
     },
     "subject": {
-        "sms": "短信 · {sender} · {message}", "call": "来电 · {caller}",
+        "sms": "短信 · {sender}", "call": "来电 · {caller}",
         "heartbeat": "{title} · {timestamp}", "keepalive": "{title} · {timestamp}", "system": "{title}",
     },
 }
@@ -244,7 +244,7 @@ stub = f"""<script>
     text: function() {{ return Promise.resolve(text != null ? text : JSON.stringify(obj)); }}
   }}); }}
   function emailSample(kind) {{
-    return kind === 'sms' ? {{sender:'+2289063869',receiver:'+19447568288020',timestamp:'2026-07-13 19:29:47 UTC+8',message:'<#> 您的 WhatsApp 验证码: 892-279\\n请不要与其他人共享这个密码\\nxxxxxxxxx',title:'短信通知'}} :
+    return kind === 'sms' ? {{sender:'+2289063869',receiver:'+447568288020',timestamp:'2026-07-13 19:29:47 UTC+8',message:'<#> 您的 WhatsApp 验证码: 892-279\\n请不要与其他人共享这个密码\\nxxxxxxxxx',title:'短信通知'}} :
       kind === 'call' ? {{caller:'+447700900456',receiver:'+447973000186',timestamp:'2026-07-13 19:29:47 UTC+8',title:'来电提醒',message:''}} :
       kind === 'heartbeat' ? {{title:'设备每日心跳',message:'设备运行正常。',timestamp:'2026-07-13 09:00:00 UTC+8',sms_total:'128',free_heap:'196'}} :
       kind === 'keepalive' ? {{title:'保号动作已执行',message:'保号动作已成功执行。',timestamp:'2026-07-13 10:20:00 UTC+8',action:'USSD 查询',result:'余额查询成功，已更新保号基准日'}} :
@@ -305,6 +305,7 @@ stub = f"""<script>
       {{ssid:'Guest', rssi:-72, enc:0}}
     ]);
     if (url.indexOf('/testpush') >= 0) return resp({{success:true, queued:false, running:false, done:true, success:true, message:'预览模式：测试推送成功'}});
+    if (url.indexOf('/testsmtp') >= 0) return resp({{success:true, queued:false, running:false, done:true, success:true, message:'预览模式：测试邮件已发送'}});
     if (url.indexOf('/ping') >= 0) return resp({{success:true, queued:false, running:false, done:true, message:'预览模式：蜂窝 payload 下载成功，已关闭 PDP'}});
     if (url.indexOf('/modem') >= 0 || url.indexOf('/flight') >= 0 || url.indexOf('/ussd') >= 0 || url.indexOf('/at?') >= 0) {{
       return resp({{success:true, message:'预览模式：示例响应'}});

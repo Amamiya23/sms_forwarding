@@ -277,39 +277,104 @@ cd sms_forwarding
 cd E:\GitHub-Repo\sms_forwarding
 ```
 
-### 3. 构建固件
+### 3. 编译固件
 
-仓库提供了 ESP-IDF 封装脚本，会自动加载 ESP-IDF 环境，并把构建产物放在 `build/idf`，把 `sdkconfig` 放在 `build/sdkconfig`：
+本仓库只支持 **ESP-IDF 6.0**（本地验证版本 **6.0.2**），目标芯片 **ESP32-C3**。请始终通过仓库脚本 `tools\idf.ps1` 编译，不要直接跑裸 `cmake`。
+
+#### 3.1 编译前准备
+
+1. 安装 [ESP-IDF 6.0.2](https://docs.espressif.com/projects/esp-idf/en/v6.0.2/esp32c3/get-started/index.html)（推荐 Espressif Installation Manager / EIM）。
+2. 安装 Python 3（用于打包 Web 静态资源）。
+3. 在仓库根目录打开 PowerShell。
+
+脚本会按下面顺序找 ESP-IDF：
+
+1. 命令行参数 `-IdfPath` / `-IdfToolsPath` / `-IdfPythonEnvPath`
+2. 环境变量 `IDF_PATH`、`IDF_TOOLS_PATH`、`IDF_PYTHON_ENV_PATH`
+3. EIM 元数据 `C:\Espressif\tools\eim_idf.json` 中当前选中的安装
+
+默认产物目录：`build\idf`  
+默认 `sdkconfig`：`build\sdkconfig`（始终在仓库 `build/` 下，不写到源码根目录）
+
+#### 3.2 一键编译（推荐）
+
+若 EIM / 环境变量已配置好：
 
 ```powershell
+# 在仓库根目录执行
 powershell -ExecutionPolicy Bypass -File tools\idf.ps1 build
 ```
 
-如果自动识别到了错误的 ESP-IDF 安装，或现有 `build/idf` 曾被其他 CMake 生成器使用，可显式指定本机 ESP-IDF 6.0.2 环境并换用新的构建目录：
+成功后主要产物：
+
+| 文件 | 说明 |
+| --- | --- |
+| `build\idf\sms_forwarding_idf.bin` | 应用固件（网页 OTA 也可上传这个） |
+| `build\idf\bootloader\bootloader.bin` | Bootloader |
+| `build\idf\partition_table\partition-table.bin` | 分区表 |
+
+#### 3.3 显式指定 ESP-IDF 路径编译
+
+自动识别到错误安装、或旧构建目录被 Visual Studio CMake 污染时，换新目录并写死路径：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\idf.ps1 build `
   -IdfPath 'C:\tools\esp\.espressif\v6.0.2\esp-idf' `
   -IdfToolsPath 'C:\Espressif\tools' `
   -IdfPythonEnvPath 'C:\Espressif\tools\python\v6.0.2\venv' `
-  -BuildDir 'build\idf-local' -Jobs 4
+  -BuildDir 'build\idf-local' `
+  -Jobs 4
 ```
 
-不要直接对工程运行裸 `cmake -B build/idf`。Windows 上它可能选择 Visual Studio 生成器，导致后续 ESP-IDF 所需的 Ninja 与缓存冲突。指定 `-BuildDir` 后，固件位于对应目录，例如 `build/idf-local/sms_forwarding_idf.bin`。
+此时产物在 `build\idf-local\`（例如 `build\idf-local\sms_forwarding_idf.bin`）。路径请按本机实际安装位置修改。
 
-如果只改了 Web UI 源码，构建前先重新生成静态资源：
+#### 3.4 只改了 Web UI 时
+
+`code/web_src/` 改完后先打包再编译固件：
 
 ```powershell
 python tools\build_web_assets.py
 python tools\build_web_assets.py --check
+powershell -ExecutionPolicy Bypass -File tools\idf.ps1 build
 ```
 
+`tools\build_web_assets.py` 会生成 `code/web_assets.h` 与 `code/web_assets.cpp`，由固件链接；`--check` 用于确认产物与源码一致。
+
+#### 3.5 清理与重配
+
+```powershell
+# 清理当前构建目录对象文件
+powershell -ExecutionPolicy Bypass -File tools\idf.ps1 clean
+
+# 彻底清空构建目录后再编（缓存损坏时用）
+powershell -ExecutionPolicy Bypass -File tools\idf.ps1 fullclean
+powershell -ExecutionPolicy Bypass -File tools\idf.ps1 build
+
+# 仅重新 CMake 配置
+powershell -ExecutionPolicy Bypass -File tools\idf.ps1 reconfigure
+```
+
+#### 3.6 注意
+
+- **不要**执行 `cmake -B build\idf .`。Windows 上可能选中 Visual Studio 生成器，与 ESP-IDF 所需的 Ninja 冲突。
+- 若报错 `generator: Ninja does not match Visual Studio`，换一个新的 `-BuildDir`（如 `build\idf-local`），不要继续复用被污染的目录。
+- 首次全量编译可能较久；中断后可对同一 `-BuildDir` 再次执行 `build`，Ninja 会增量续编。
+- CI 见 `.github/workflows/build.yml`；本地日常开发仍建议用 `tools\idf.ps1`，保证产物路径一致。
+
 ### 4. 烧录到 ESP32-C3
+
+默认构建目录 `build\idf`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\idf.ps1 flash -Port COM5
+```
+
+若编译时用了自定义 `-BuildDir`，烧录也要带上同一目录（路径按本机修改）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\idf.ps1 flash `
   -Port COM22 `
-  -BuildDir 'build\idf-email' `
+  -BuildDir 'build\idf-local' `
   -IdfPath 'C:\tools\esp\.espressif\v6.0.2\esp-idf' `
   -IdfToolsPath 'C:\Espressif\tools' `
   -IdfPythonEnvPath 'C:\Espressif\tools\python\v6.0.2\venv'
@@ -323,15 +388,13 @@ powershell -ExecutionPolicy Bypass -File tools\idf.ps1 flash `
 powershell -ExecutionPolicy Bypass -File tools\idf.ps1 monitor -Port COM5
 ```
 
-`monitor` 中可以看到 WiFi 连接、模组初始化、短信接收、推送、Web 访问和崩溃原因等日志。退出 monitor 通常使用 `Ctrl+]`。
+自定义构建目录时同样加上 `-BuildDir`（及需要的 `-IdfPath` 等）。`monitor` 中可以看到 WiFi 连接、模组初始化、短信接收、推送、Web 访问和崩溃原因等日志。退出 monitor 通常使用 `Ctrl+]`。
 
 ### 6. 首次访问 Web UI
 
 首次启动时设备会优先连接已保存 WiFi；如果没有配置或连接失败，会开启开放热点 `SMS-Forwarder-XXXX`。连接热点后访问 `http://192.168.1.1` 配网；设备连上路由器后，可通过串口日志里的 IP 地址或 `http://sms.local` 打开 Web UI（主机名可在"系统设置 → 局域网域名"中修改，多台设备请设置不同主机名）。
 
 默认账号密码为 `admin` / `admin123`，首次使用请立即修改。
-
-CI 使用 `.github/workflows/build.yml` 构建 ESP-IDF 固件，日常本地开发建议仍使用 `tools\idf.ps1`，这样构建目录和配置文件位置保持一致。
 
 ## Bark 推送
 

@@ -102,7 +102,7 @@ static const char DEFAULT_SYSTEM_BODY[] = R"EMAIL(<p class="eyebrow">系统通�
 <div class="message" style="border-left-color:#3477b8;background:#eef5fb">{message}</div>)EMAIL";
 
 static const char* DEFAULT_SUBJECTS[] = {
-    "短信 · {sender} · {message}",
+    "短信 · {sender}",
     "来电 · {caller}",
     "{title} · {timestamp}",
     "{title} · {timestamp}",

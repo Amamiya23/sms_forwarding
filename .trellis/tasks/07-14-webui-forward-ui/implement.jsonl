@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/email-template-contracts.md", "reason": "SMS subject defaults, template storage, and SMTP render contracts"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "ESP-IDF build and quality expectations when touching firmware"}
+{"file": ".trellis/spec/frontend/email-template-editor.md", "reason": "Dashboard email editor contracts adjacent to forward settings page"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend guideline index for UI work"}

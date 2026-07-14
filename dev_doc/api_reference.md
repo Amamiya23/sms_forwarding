@@ -415,6 +415,7 @@ HTTP Basic Authentication，账号密码来自 `config.webUser` / `config.webPas
 | `POST /resend` `POST /delete` | `handleResend()` / `handleDeleteMsg()` | 重发/删除收件箱某条（`?id=`） |
 | `GET /keepalive` | `handleKeepAlive()` | 保号：`?action=status\|run\|reset`；`run` 入队由 loop 执行（默认动作 = 蜂窝 HTTP payload 下载） |
 | `GET /testpush` | `handleTestPush()` | 通道测试：`?ch=` 入队，`?action=status` 轮询；真实发送在 worker |
+| `POST /testsmtp` `GET /testsmtp?action=status` | `handleTestSmtp()` | SMTP 测试：POST 表单字段（`smtpServer/port/user/pass/sendTo`，pass 空则用已存密码）；status 轮询；真实发送在 worker，不写 NVS |
 | `GET /ussd` | `handleUssd()` | USSD 查询（`AT+CUSD`，同步最长 ~20s） |
 | `GET /modem` `GET /wifi` `GET /wifiscan` `POST /wificonfig` | — | 模组信息 / WiFi 状态 / 扫描 / 保存并重启接入 |
 | `POST /reboot` `POST /factory` | `handleReboot()` / `handleFactory()` | 重启 / 恢复出厂（清 NVS） |
@@ -422,4 +423,4 @@ HTTP Basic Authentication，账号密码来自 `config.webUser` / `config.webPas
 | `GET /logdownload` | `handleLogDownload()` | 纯文本下载全部日志 |
 | `POST /update` | `handleOtaUpload()` / `handleOtaFinish()` | 网页 OTA 固件升级 |
 
-并发说明：`/testpush` 真正的推送发送在后台 `pushWorkerTask`；`/keepalive run`、`/sendsms`、`/ping` 的模组/网络动作仍在 loop 任务（经队列异步）。日志相关读取（`/log`、`/logdownload`）与写入用 `gLogMux` 保护。
+并发说明：`/testpush`、`/testsmtp` 真正的发送在后台 `pushWorkerTask`；`/keepalive run`、`/sendsms`、`/ping` 的模组/网络动作仍在 loop 任务（经队列异步）。日志相关读取（`/log`、`/logdownload`）与写入用 `gLogMux` 保护。

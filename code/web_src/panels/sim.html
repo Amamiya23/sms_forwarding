@@ -27,7 +27,7 @@
               <p class="form-hint">从列表选运营商或手动填 PLMN(MCC+MNC，国外同理)。仅能选 SIM 可接入的网络，锁定不可达会失网；不确定留空自动。</p></div>
             <div class="form-group"><label class="form-label">本机号码（手填）</label>
               <input class="form-input" type="text" name="phoneNumber" value="%PHONE_NUMBER%" placeholder="卡不上报号码时用于概览显示，可留空">
-              <p class="form-hint">多数 eSIM/数据卡不通过 CNUM 上报本机号码，模组读不到时概览会显示这里的手填值。换卡后请更新或清空，否则会一直显示旧号码。</p></div>
+              <p class="form-hint">手填优先于模组 CNUM。多数 eSIM 不上报本机号或会报错号时，请在此填写正确号码（如 +4475…）；概览与邮件里的「本机号码」都用这里。换卡后请更新或清空。</p></div>
           </div>
         </div>
         <button type="submit" class="btn btn-primary btn-block btn-save">保存蜂窝设置</button>
