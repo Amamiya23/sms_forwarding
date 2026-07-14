@@ -146,16 +146,33 @@ struct TickDeadline {
     void restart(uint32_t ms) { start = xTaskGetTickCount(); span = pdMS_TO_TICKS(ms); }
 };
 
-// AT 最终结果码：1=OK，-1=ERROR/+CMS ERROR/+CME ERROR(27.005/27.007 定义的失败终结码)，0=未结束
+// AT 最终结果码：1=OK，-1=ERROR/+CMS ERROR/+CME ERROR(27.005/27.007 定义的失败终结码)，0=未结束。
+// 不要求末尾必须再跟 CRLF：部分长命令的最后一个 UART 块可能恰好止于 "OK"。
 static int at_final_result(const std::string& resp)
 {
-    if (resp.find("\r\nOK\r\n") != std::string::npos ||
-        resp.find("\nOK\r\n") != std::string::npos) return 1;
-    if (resp.find("\r\nERROR\r\n") != std::string::npos ||
-        resp.find("\nERROR\r\n") != std::string::npos ||
-        resp.find("+CMS ERROR") != std::string::npos ||
-        resp.find("+CME ERROR") != std::string::npos) return -1;
+    size_t pos = 0;
+    while (pos < resp.size()) {
+        size_t end = resp.find_first_of("\r\n", pos);
+        if (end == std::string::npos) end = resp.size();
+        std::string line = trim(resp.substr(pos, end - pos));
+        if (line == "OK") return 1;
+        if (line == "ERROR" || line.rfind("+CMS ERROR", 0) == 0 ||
+            line.rfind("+CME ERROR", 0) == 0) return -1;
+        pos = end;
+        while (pos < resp.size() && (resp[pos] == '\r' || resp[pos] == '\n')) ++pos;
+    }
     return 0;
+}
+
+static bool has_cmgs_result(const std::string& resp)
+{
+    size_t pos = resp.find("+CMGS:");
+    if (pos == std::string::npos) return false;
+    pos += strlen("+CMGS:");
+    while (pos < resp.size() && isspace(static_cast<unsigned char>(resp[pos]))) ++pos;
+    if (pos >= resp.size() || !isdigit(static_cast<unsigned char>(resp[pos]))) return false;
+    while (pos < resp.size() && isdigit(static_cast<unsigned char>(resp[pos]))) ++pos;
+    return true;
 }
 
 // 取包含 token 的那一整行(不同 URC 混在同一段响应里时不能只取"第一有效行")
@@ -623,6 +640,12 @@ esp_err_t idf_modem_send_pdu(const std::string& cmgs_cmd, const char* pdu, uint3
             if (got > 0) {
                 append_capped(response, buf, static_cast<size_t>(got), MAX_RESPONSE);
                 scan.append(reinterpret_cast<const char*>(buf), got);
+                // 官方手册定义 +CMGS:<mr> 即网络已接受 SMS-SUBMIT；某些固件的尾随 OK
+                // 可能没有完整 CRLF，不能因此把已经发送成功的短信等到超时。
+                if (has_cmgs_result(response) || has_cmgs_result(scan)) {
+                    ret = ESP_OK;
+                    break;
+                }
                 int final_code = at_final_result(scan);
                 if (final_code != 0) {
                     ret = final_code > 0 ? ESP_OK : ESP_FAIL;
@@ -1247,7 +1270,8 @@ static bool apply_configured_data_mode_once(const IdfSimSettingsView& cfg, uint3
 
 // 数据漫游策略兜底：未勾选"允许数据漫游"且当前漫游(stat=5)时确保蜂窝数据关闭。
 // 启动阶段拿不到注册状态会先乐观激活，注册完成后在此关闭，避免漫游误跑流量。
-// 短信不受影响(走 CS/IMS 信令域)。归属网络(stat=1)不干预，按常规激活。
+// 此开关只控制数据 PDP；短信是否可用由 SIM、模组和运营商短信承载共同决定，
+// 不能仅凭 CEREG/CREG 中的某一个状态判断。归属网络(stat=1)不干预，按常规激活。
 static void enforce_roaming_data_policy(const IdfSimSettingsView& cfg, int stat)
 {
     if (!cfg.dataEnabled || cfg.roamingEnabled) return;  // 未开数据或允许漫游数据：无需干预
@@ -1772,6 +1796,7 @@ void idf_modem_reassert_sms_storage(void)
 static bool configure_sms_and_registration(void)
 {
     send_ok("ATE0", 1000);
+    send_ok("AT+CMEE=1", 1200);  // 明确返回 +CMS/+CME 数字错误，避免只有笼统 ERROR
     bool pdu_mode_ok = send_ok("AT+CMGF=0", 1200);
     // 统一收/存/读的短信存储位置：CNMI mt=1 投递到 <mem3>，CMGL/CMGR 读 <mem1>，
     // 两者不一致时 +CMTI 索引和补收轮询会看不同的存储，短信被静默丢失

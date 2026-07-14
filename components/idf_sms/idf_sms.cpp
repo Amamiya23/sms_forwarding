@@ -1227,6 +1227,7 @@ static std::string sms_submit_failure_detail(esp_err_t err, const std::string& r
         }
         return "等待短信输入提示符超时（PDU 尚未提交）";
     }
+    if (err == ESP_OK) return "模组响应格式异常";
     return esp_err_to_name(err);
 }
 
