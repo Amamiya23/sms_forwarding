@@ -72,12 +72,7 @@ if ([string]::IsNullOrWhiteSpace($Port)) {
 }
 
 $Action = if ($NoMonitor) { 'buildflash' } else { 'all' }
-$passArgs = @($Action, '-Port', $Port)
-if ($BuildDir) { $passArgs += '-BuildDir', $BuildDir }
-if ($IdfPath) { $passArgs += '-IdfPath', $IdfPath }
-if ($IdfToolsPath) { $passArgs += '-IdfToolsPath', $IdfToolsPath }
-if ($IdfPythonEnvPath) { $passArgs += '-IdfPythonEnvPath', $IdfPythonEnvPath }
-if ($Jobs -gt 0) { $passArgs += '-Jobs', $Jobs }
 
-Write-Host ("[go] 执行: tools\idf.ps1 {0}" -f ($passArgs -join ' ')) -ForegroundColor Green
-& $IdfScript @passArgs
+Write-Host ("[go] 执行: tools\idf.ps1 -Action {0} -Port {1}" -f $Action, $Port) -ForegroundColor Green
+& $IdfScript -Action $Action -Port $Port -BuildDir $BuildDir -IdfPath $IdfPath `
+    -IdfToolsPath $IdfToolsPath -IdfPythonEnvPath $IdfPythonEnvPath -Jobs $Jobs

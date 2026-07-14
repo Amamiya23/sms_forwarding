@@ -84,34 +84,71 @@ if ($Jobs -le 0) {
     if ($Jobs -le 0) { $Jobs = 4 }
 }
 
+function Reset-StaleBuildDirectory {
+    $cachePath = Join-Path $BuildDir 'CMakeCache.txt'
+    if (-not (Test-Path -LiteralPath $cachePath)) { return }
+
+    $generatorLine = Get-Content -LiteralPath $cachePath |
+        Where-Object { $_ -like 'CMAKE_GENERATOR:INTERNAL=*' } |
+        Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($generatorLine)) { return }
+
+    $generator = $generatorLine.Substring('CMAKE_GENERATOR:INTERNAL='.Length)
+    if ($generator -eq 'Ninja') { return }
+
+    Write-Warning "Build directory uses CMake generator '$generator'; removing stale build artifacts."
+    Remove-Item -LiteralPath $BuildDir -Recurse -Force
+    New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
+}
+
+function Invoke-Idf {
+    param([Parameter(Mandatory = $true)][string[]]$CommandArgs)
+
+    idf.py @CommandArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "idf.py $($CommandArgs -join ' ') failed with exit code $LASTEXITCODE."
+    }
+}
+
+function Invoke-Ninja {
+    ninja -C $BuildDir -j $Jobs
+    if ($LASTEXITCODE -ne 0) {
+        throw "ninja failed with exit code $LASTEXITCODE."
+    }
+}
+
+if ($Action -in @('build', 'buildflash', 'all', 'reconfigure')) {
+    Reset-StaleBuildDirectory
+}
+
 switch ($Action) {
     'build' {
-        idf.py @IdfArgs reconfigure
-        ninja -C $BuildDir -j $Jobs
+        Invoke-Idf ($IdfArgs + @('reconfigure'))
+        Invoke-Ninja
     }
     'buildflash' {
-        idf.py @IdfArgs reconfigure
-        ninja -C $BuildDir -j $Jobs
-        idf.py @IdfArgs -p $Port flash
+        Invoke-Idf ($IdfArgs + @('reconfigure'))
+        Invoke-Ninja
+        Invoke-Idf ($IdfArgs + @('-p', $Port, 'flash'))
     }
     'all' {
-        idf.py @IdfArgs reconfigure
-        ninja -C $BuildDir -j $Jobs
-        idf.py @IdfArgs -p $Port flash monitor
+        Invoke-Idf ($IdfArgs + @('reconfigure'))
+        Invoke-Ninja
+        Invoke-Idf ($IdfArgs + @('-p', $Port, 'flash', 'monitor'))
     }
     'flash' {
-        idf.py @IdfArgs -p $Port flash
+        Invoke-Idf ($IdfArgs + @('-p', $Port, 'flash'))
     }
     'monitor' {
-        idf.py @IdfArgs -p $Port monitor
+        Invoke-Idf ($IdfArgs + @('-p', $Port, 'monitor'))
     }
     'reconfigure' {
-        idf.py @IdfArgs reconfigure
+        Invoke-Idf ($IdfArgs + @('reconfigure'))
     }
     'clean' {
-        idf.py @IdfArgs clean
+        Invoke-Idf ($IdfArgs + @('clean'))
     }
     'fullclean' {
-        idf.py @IdfArgs fullclean
+        Invoke-Idf ($IdfArgs + @('fullclean'))
     }
 }

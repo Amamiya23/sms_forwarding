@@ -22,7 +22,7 @@ ESP32-C3 + ML307 系列 4G/LTE 模组的轻量短信转发固件。设备通过 
 
 ### 1. 准备环境
 
-- Windows + PowerShell。
+- Windows + PowerShell 7（`pwsh`）。
 - ESP32-C3 开发板（Super Mini 等）+ ML307 系列 4G/LTE 模组 + USB 数据线。
 - ESP-IDF 6.0（本地验证版本 6.0.2）。脚本会依次读取 EIM 元数据 `C:\Espressif\tools\eim_idf.json`、或环境变量 `IDF_PATH` / `IDF_TOOLS_PATH` / `IDF_PYTHON_ENV_PATH`。
 - Python 3（仅改 Web UI 时用于打包静态资源）。
@@ -62,23 +62,23 @@ ESP32-C3 5V     -> ML307 VCC
 
 ```powershell
 # 编译 + 烧录 + 监控（烧完直接看日志，Ctrl+] 退出）
-powershell -ExecutionPolicy Bypass -File tools\idf.ps1 all -Port COM5
+pwsh -ExecutionPolicy Bypass -File tools\idf.ps1 all -Port COM5
 
 # 只要编译 + 烧录
-powershell -ExecutionPolicy Bypass -File tools\idf.ps1 buildflash -Port COM5
+pwsh -ExecutionPolicy Bypass -File tools\idf.ps1 buildflash -Port COM5
 ```
 
 不想每次手填串口号，用 `tools\go.ps1` 自动探测 USB 串口（CH340/CP210x/JTAG 等）：
 
 ```powershell
 # 自动探测串口，编译 + 烧录 + 监控
-powershell -ExecutionPolicy Bypass -File tools\go.ps1
+pwsh -ExecutionPolicy Bypass -File tools\go.ps1
 
 # 只编译 + 烧录，不进监控
-powershell -ExecutionPolicy Bypass -File tools\go.ps1 -NoMonitor
+pwsh -ExecutionPolicy Bypass -File tools\go.ps1 -NoMonitor
 
 # 探测到多个串口或想指定时
-powershell -ExecutionPolicy Bypass -File tools\go.ps1 -Port COM22
+pwsh -ExecutionPolicy Bypass -File tools\go.ps1 -Port COM22
 ```
 
 `go.ps1` 会把 `-BuildDir`、`-IdfPath`、`-IdfToolsPath`、`-IdfPythonEnvPath`、`-Jobs` 透传给 `idf.ps1`；若探测到多个 USB 串口，会列出全部并要求用 `-Port` 指定。
@@ -89,13 +89,13 @@ powershell -ExecutionPolicy Bypass -File tools\go.ps1 -Port COM22
 
 ```powershell
 # 只编译
-powershell -ExecutionPolicy Bypass -File tools\idf.ps1 build
+pwsh -ExecutionPolicy Bypass -File tools\idf.ps1 build
 
 # 已编译过，只重新烧录
-powershell -ExecutionPolicy Bypass -File tools\idf.ps1 flash -Port COM5
+pwsh -ExecutionPolicy Bypass -File tools\idf.ps1 flash -Port COM5
 
 # 只看串口日志
-powershell -ExecutionPolicy Bypass -File tools\idf.ps1 monitor -Port COM5
+pwsh -ExecutionPolicy Bypass -File tools\idf.ps1 monitor -Port COM5
 ```
 
 #### 显式指定 ESP-IDF 路径
@@ -103,7 +103,7 @@ powershell -ExecutionPolicy Bypass -File tools\idf.ps1 monitor -Port COM5
 自动识别到错误安装、或旧构建目录被 Visual Studio CMake 污染时，换新目录并写死路径（路径按本机修改）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\idf.ps1 build `
+pwsh -ExecutionPolicy Bypass -File tools\idf.ps1 build `
   -IdfPath 'C:\tools\esp\.espressif\v6.0.2\esp-idf' `
   -IdfToolsPath 'C:\Espressif\tools' `
   -IdfPythonEnvPath 'C:\Espressif\tools\python\v6.0.2\venv' `
@@ -130,7 +130,7 @@ powershell -ExecutionPolicy Bypass -File tools\idf.ps1 build `
 ```powershell
 python tools\build_web_assets.py
 python tools\build_web_assets.py --check
-powershell -ExecutionPolicy Bypass -File tools\idf.ps1 build
+pwsh -ExecutionPolicy Bypass -File tools\idf.ps1 build
 ```
 
 `--check` 用于确认产物与源码一致。
@@ -139,19 +139,19 @@ powershell -ExecutionPolicy Bypass -File tools\idf.ps1 build
 
 ```powershell
 # 清理当前构建目录对象文件
-powershell -ExecutionPolicy Bypass -File tools\idf.ps1 clean
+pwsh -ExecutionPolicy Bypass -File tools\idf.ps1 clean
 
 # 彻底清空构建目录后再编（缓存损坏时用）
-powershell -ExecutionPolicy Bypass -File tools\idf.ps1 fullclean
+pwsh -ExecutionPolicy Bypass -File tools\idf.ps1 fullclean
 
 # 仅重新 CMake 配置
-powershell -ExecutionPolicy Bypass -File tools\idf.ps1 reconfigure
+pwsh -ExecutionPolicy Bypass -File tools\idf.ps1 reconfigure
 ```
 
 #### 注意
 
 - **不要**执行 `cmake -B build\idf .`。Windows 上可能选中 Visual Studio 生成器，与 ESP-IDF 所需的 Ninja 冲突。
-- 若报错 `generator: Ninja does not match Visual Studio`，换一个新的 `-BuildDir`（如 `build\idf-local`），不要复用被污染的目录。
+- 脚本检测到 Visual Studio 等非 Ninja 的 CMake 缓存时会自动清理该 `BuildDir` 并重新配置；仍异常时执行 `fullclean` 后重试。
 - 首次全量编译较久；中断后对同一 `-BuildDir` 再次执行 `build`，Ninja 会增量续编。
 
 ### 4. 首次访问 Web UI
